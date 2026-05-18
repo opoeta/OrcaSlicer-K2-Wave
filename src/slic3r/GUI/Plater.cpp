@@ -5001,8 +5001,12 @@ bool Sidebar::is_cfs_supported_printer() const
                                << "' model='" << printer_model
                                << "' preset='" << preset.name << "'";
 
-    return printer_type.find("K1") != std::string::npos
-        || printer_model.find("K1") != std::string::npos;
+    bool has_k1 = printer_type.find("K1") != std::string::npos
+               || printer_model.find("K1") != std::string::npos;
+    bool has_k2 = printer_type.find("K2") != std::string::npos
+               || printer_model.find("K2") != std::string::npos;
+
+    return has_k1 || has_k2;
 }
 
 std::string Sidebar::get_cfs_socket_origin() const
