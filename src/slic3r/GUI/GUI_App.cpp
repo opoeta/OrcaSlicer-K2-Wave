@@ -35,6 +35,7 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/nowide/convert.hpp>
+#include <boost/nowide/cstdio.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/beast/core/detail/base64.hpp>
@@ -277,7 +278,11 @@ class SplashScreen : public wxSplashScreen
 {
 public:
     SplashScreen(wxPoint pos = wxDefaultPosition)
-        : wxSplashScreen(wxBitmap(FromDIP(wxSize(480,480),nullptr)), wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_TIMEOUT, 1500, nullptr, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+        // No wxSPLASH_TIMEOUT — the splash is closed explicitly once MainFrame
+        // is shown. The previous 1500 ms auto-timeout closed the splash long
+        // before init finished, leaving the user staring at a frozen blank
+        // screen during the slow load_presets / new MainFrame phases.
+        : wxSplashScreen(wxBitmap(FromDIP(wxSize(480,480),nullptr)), wxSPLASH_CENTRE_ON_SCREEN, 0, nullptr, wxID_ANY, wxDefaultPosition, wxDefaultSize,
 #ifdef __APPLE__
             wxBORDER_NONE | wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP
 #else
@@ -1895,6 +1900,7 @@ void GUI_App::init_networking_callbacks()
             }
             if (return_code == 5) {
                 GUI::wxGetApp().CallAfter([this, provider = event.provider] {
+                    BOOST_LOG_TRIVIAL(info) << "logout: login expired";
                     this->request_user_logout(provider);
                     MessageDialog msg_dlg(nullptr, _L("Login information expired. Please login again."), "", wxAPPLY | wxOK);
                     if (msg_dlg.ShowModal() == wxOK) {
@@ -2757,7 +2763,7 @@ bool GUI_App::on_init_inner()
         //BBS use BBL splashScreen
         scrn = new SplashScreen(splashscreen_pos);
         wxYield();
-        //scrn->SetText(_L("Loading configuration")+ dots);
+        scrn->SetText(_L("Loading configuration") + dots);
     }
 
     BOOST_LOG_TRIVIAL(info) << "loading systen presets...";
@@ -2842,7 +2848,7 @@ bool GUI_App::on_init_inner()
                 wxString tips = wxString::Format(_L("Click to download new version in default browser: %s"), version_str);
                 DownloadDialog dialog(this->mainframe,
                     tips,
-                    _L("The Orca Slicer needs an upgrade"),
+                    _L("OrcaSlicer needs an update"),
                     false,
                     wxCENTER | wxICON_INFORMATION);
                 dialog.SetExtendedMessage(description_text);
@@ -2932,6 +2938,7 @@ bool GUI_App::on_init_inner()
             // Enable all substitutions (in both user and system profiles), but log the substitutions in user profiles only.
             // If there are substitutions in system profiles, then a "reconfigure" event shall be triggered, which will force
             // installation of a compatible system preset, thus nullifying the system preset substitutions.
+            if (scrn) { scrn->SetText(_L("Loading printer & filament profiles") + dots); wxYield(); }
             init_params->preset_substitutions = preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSystemSilent);
         }
         catch (const std::exception& ex) {
@@ -2960,6 +2967,7 @@ bool GUI_App::on_init_inner()
     }
 #endif
 
+    if (scrn) { scrn->SetText(_L("Creating main window") + dots); wxYield(); }
     BOOST_LOG_TRIVIAL(info) << "create the main window";
     mainframe = new MainFrame();
     // hide settings tabs after first Layout
@@ -2984,8 +2992,10 @@ bool GUI_App::on_init_inner()
             // ensure the selected technology is ptFFF
             plater_->set_printer_technology(ptFFF);
     }
-    else
+    else {
+        if (scrn) { scrn->SetText(_L("Loading current preset") + dots); wxYield(); }
         load_current_presets();
+    }
 
     if (plater_ != nullptr) {
         plater_->reset_project_dirty_initial_presets();
@@ -2997,7 +3007,10 @@ bool GUI_App::on_init_inner()
 #ifdef __WINDOWS__
     mainframe->topbar()->SaveNormalRect();
 #endif
+    if (scrn) { scrn->SetText(_L("Showing main window") + dots); wxYield(); }
     mainframe->Show(true);
+    // Close the splash now that the main UI is visible.
+    if (scrn) { scrn->Destroy(); scrn = nullptr; }
     BOOST_LOG_TRIVIAL(info) << "main frame firstly shown";
 
 //#if BBL_HAS_FIRST_PAGE
@@ -4514,7 +4527,8 @@ std::string GUI_App::handle_web_request(std::string cmd)
             }
             else if (command_str.compare("homepage_logout") == 0) {
                 CallAfter([this] {
-                    wxGetApp().request_user_logout();
+                    BOOST_LOG_TRIVIAL(info) << "logout: homepage_logout";
+                    request_user_logout();
                 });
             }
             else if (command_str.compare("get_orca_login_info") == 0) {
@@ -4527,18 +4541,22 @@ std::string GUI_App::handle_web_request(std::string cmd)
                 CallAfter([this] { request_login(true, BBL_CLOUD_PROVIDER); });
             }
             else if (command_str.compare("homepage_bambu_logout") == 0) {
-                CallAfter([this] { request_user_logout(BBL_CLOUD_PROVIDER); });
+                CallAfter([this] {
+                    BOOST_LOG_TRIVIAL(info) << "logout: homepage_bambu_logout";
+                    request_user_logout(BBL_CLOUD_PROVIDER);
+                });
             }
             else if (command_str.compare("homepage_orca_login_or_register") == 0) {
                 CallAfter([this] { request_login(true, ORCA_CLOUD_PROVIDER); });
             }
             else if (command_str.compare("homepage_orca_logout") == 0) {
-                CallAfter([this] { request_user_logout(ORCA_CLOUD_PROVIDER); });
+                CallAfter([this] {
+                    BOOST_LOG_TRIVIAL(info) << "logout: homepage_orca_logout";
+                    request_user_logout(ORCA_CLOUD_PROVIDER);
+                });
             }
             else if (command_str.compare("homepage_modeldepot") == 0) {
-                CallAfter([this] {
-                    wxGetApp().open_mall_page_dialog();
-                });
+                CallAfter([this] { open_mall_page_dialog(); });
             }
             else if (command_str.compare("homepage_newproject") == 0) {
                 this->request_open_project("<new>");
@@ -4814,6 +4832,7 @@ void GUI_App::on_http_error(wxCommandEvent &evt)
     if (status == 401) {
         if (m_agent) {
             if (m_agent->is_user_login(provider)) {
+                BOOST_LOG_TRIVIAL(warning) << "logout: http error 401.";
                 this->request_user_logout(provider);
 
                 if (!m_show_http_errpr_msgdlg) {
@@ -5587,6 +5606,7 @@ void GUI_App::show_check_privacy_dlg(wxCommandEvent& evt)
     privacy_dlg.Bind(EVT_PRIVACY_UPDATE_CANCEL, [this, provider](wxCommandEvent &e) {
             app_config->set_bool("privacy_update_checked", false);
             if (m_agent) {
+                BOOST_LOG_TRIVIAL(info) << "logout: Privacy update dialog cancelled.";
                 m_agent->user_logout(false, provider);
                 post_logout_to_webview(provider);
             }
@@ -5781,7 +5801,10 @@ void GUI_App::reload_settings()
         load_pending_vendors();
         preset_bundle->load_user_presets(*app_config, user_presets, ForwardCompatibilitySubstitutionRule::Enable);
         preset_bundle->save_user_presets(*app_config, get_delete_cache_presets());
-        mainframe->update_side_preset_ui();
+        if (is_main_thread_active())
+            mainframe->update_side_preset_ui();
+        else
+            CallAfter([this] { mainframe->update_side_preset_ui(); });
     }
 }
 
@@ -6022,8 +6045,10 @@ void GUI_App::load_pending_vendors()
         return;
 
     preset_bundle->apply_vendor_config(need_add_vendors, need_add_filaments, app_config, false);
-    app_config->save();
-
+    if (is_main_thread_active())
+        app_config->save();
+    else
+        CallAfter([this] { app_config->save(); });
     need_add_vendors.clear();
     need_add_filaments.clear();
 }
@@ -6507,36 +6532,29 @@ void GUI_App::start_sync_user_preset(bool with_progress_dlg)
         cancelFn = [this, dlg]() {
             return is_closing() || dlg->WasCanceled();
         };
-        finishFn = [this, userid = m_agent->get_user_id(), dlg, t = std::weak_ptr<int>(m_user_sync_token)](bool ok) {
-            CallAfter([=]{
-                dlg->Destroy();
-                if (ok && m_agent && t.lock() == m_user_sync_token && userid == m_agent->get_user_id()) reload_settings();
-            });
+        finishFn = [this, dlg](bool) {
+            CallAfter([=]{ dlg->Destroy(); });
         };
     }
     else {
-        finishFn = [this, userid = m_agent->get_user_id(), t = std::weak_ptr<int>(m_user_sync_token)](bool ok) {
-            CallAfter([=] {
-                if (ok && m_agent && t.lock() == m_user_sync_token && userid == m_agent->get_user_id()) reload_settings();
-            });
-        };
+        finishFn = [](bool) {}; // reload_settings() is now triggered from the background thread
         cancelFn = [this]() {
             return is_closing();
         };
     }
 
-    // Do a one-time scan for files that may be pending deletion (e.g., was deleted while not connected to internet)
-    // Scan for orphaned .info files on startup and add them to deletion queue
-    scan_orphaned_info_files();
-    process_delete_presets();
-
     Bind(EVT_UPDATE_PRESET_BUNDLE,&GUI_App::update_single_bundle,this);
 
     m_sync_update_thread = Slic3r::create_thread(
         [this, progressFn, cancelFn, finishFn, t = std::weak_ptr<int>(m_user_sync_token)] {
+            if (!m_agent) return;
+
+            // One-time scan for orphaned .info files left over from offline deletions; queues HTTP DELETEs.
+            scan_orphaned_info_files();
+            process_delete_presets();
+
             // get setting list, update setting list
             std::string version = preset_bundle->get_vendor_profile_version(PresetBundle::ORCA_DEFAULT_BUNDLE).to_string();
-            if(!m_agent) return;
 
             // run check_and_fix_user_presets_syncinfo once before syncing to make sure all presets have correct sync_info
             // So that we can sync presets that are migrated from old version or users manually put preset files in preset folder
@@ -6561,8 +6579,11 @@ void GUI_App::start_sync_user_preset(bool with_progress_dlg)
                 }
             }, progressFn, cancelFn);
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << __LINE__ << " get_setting_list2 ret = " << ret << " m_is_closing = " << m_is_closing;
-            
+
             finishFn(ret == 0);
+
+            if (ret == 0 && m_agent && !t.expired())
+                reload_settings();
 
             // For orca specific syncing
             auto orca_agent = std::dynamic_pointer_cast<OrcaCloudServiceAgent>(m_agent->get_cloud_agent());
@@ -6753,6 +6774,7 @@ void GUI_App::stop_sync_user_preset()
 void GUI_App::on_stealth_mode_enter()
 {
     stop_sync_user_preset();
+    BOOST_LOG_TRIVIAL(info) << "logout: on_stealth_mode_enter";
     request_user_logout(ORCA_CLOUD_PROVIDER);
     request_user_logout(BBL_CLOUD_PROVIDER);
     if (mainframe && mainframe->m_webview) {
@@ -7540,6 +7562,13 @@ void GUI_App::open_exportpresetbundledialog(size_t open_on_tab, const std::strin
 
 void GUI_App::open_preferences(size_t open_on_tab, const std::string& highlight_option)
 {
+    static constexpr const char* opengl_fxaa_setting_key = "opengl_fxaa_enabled";
+    static constexpr const char* opengl_fps_cap_setting_key = "opengl_fps_cap";
+    static constexpr const char* opengl_show_fps_overlay_setting_key = "opengl_show_fps_overlay";
+    const std::string previous_opengl_fxaa = app_config->get(opengl_fxaa_setting_key);
+    const std::string previous_opengl_fps_cap = app_config->get(opengl_fps_cap_setting_key);
+    const std::string previous_opengl_show_fps_overlay = app_config->get(opengl_show_fps_overlay_setting_key);
+
     bool need_recreate_gui = false;
     std::string pending_language;
     {
@@ -7576,6 +7605,14 @@ void GUI_App::open_preferences(size_t open_on_tab, const std::string& highlight_
             }
 #endif // _WIN32
         }
+    }
+
+    const bool opengl_fxaa_changed = app_config->get(opengl_fxaa_setting_key) != previous_opengl_fxaa;
+    const bool opengl_fps_cap_changed = app_config->get(opengl_fps_cap_setting_key) != previous_opengl_fps_cap;
+    const bool opengl_show_fps_overlay_changed = app_config->get(opengl_show_fps_overlay_setting_key) != previous_opengl_show_fps_overlay;
+    if ((opengl_fxaa_changed || opengl_fps_cap_changed || opengl_show_fps_overlay_changed) && !need_recreate_gui && this->plater_ != nullptr) {
+        this->plater_->set_current_canvas_as_dirty();
+        this->plater_->get_current_canvas3D()->force_set_focus();
     }
 
     if (!pending_language.empty()) {
