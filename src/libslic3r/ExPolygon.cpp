@@ -7,7 +7,6 @@
 #include "ClipperUtils.hpp"
 #include "SVG.hpp"
 #include <algorithm>
-#include <boost/log/trivial.hpp>
 #include <cassert>
 #include <list>
 
@@ -408,31 +407,11 @@ BoundingBox get_extents(const ExPolygon &expolygon)
 BoundingBox get_extents(const ExPolygons &expolygons)
 {
     BoundingBox bbox;
-
-    const size_t n = expolygons.size();
-
-    BOOST_LOG_TRIVIAL(info)
-        << "get_extents ExPolygons addr=" << &expolygons
-        << " data=" << expolygons.data()
-        << " size=" << n
-        << " capacity=" << expolygons.capacity();
-
-    if (n > 1000000) {
-        BOOST_LOG_TRIVIAL(error)
-            << "Suspicious ExPolygons size=" << n
-            << " addr=" << &expolygons
-            << " data=" << expolygons.data()
-            << " capacity=" << expolygons.capacity();
-
-        assert(false);
-        return bbox;
+    if (! expolygons.empty()) {
+        for (size_t i = 0; i < expolygons.size(); ++ i)
+			if (! expolygons[i].contour.points.empty())
+				bbox.merge(get_extents(expolygons[i]));
     }
-
-    for (size_t i = 0; i < n; ++i) {
-        if (!expolygons[i].contour.points.empty())
-            bbox.merge(get_extents(expolygons[i]));
-    }
-
     return bbox;
 }
 

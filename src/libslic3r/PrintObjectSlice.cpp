@@ -908,24 +908,7 @@ static inline void apply_mm_segmentation(PrintObject &print_object, ThrowOnCance
                 bool layer_split = false;
                 for (size_t extruder_id = 0; extruder_id < num_extruders; ++ extruder_id) {
                     ByExtruder &region = by_extruder[extruder_id];
-                    const auto &src_expolys = segmentation[layer_id][extruder_id];
-                    BOOST_LOG_TRIVIAL(info)
-                        << "apply_mm_segmentation before move"
-                        << " layer_id=" << layer_id
-                        << " extruder_id=" << extruder_id
-                        << " src_addr=" << &src_expolys
-                        << " src_data=" << src_expolys.data()
-                        << " src_size=" << src_expolys.size()
-                        << " src_capacity=" << src_expolys.capacity();
                     append(region.expolygons, std::move(segmentation[layer_id][extruder_id]));
-                    BOOST_LOG_TRIVIAL(info)
-                        << "apply_mm_segmentation after move"
-                        << " layer_id=" << layer_id
-                        << " extruder_id=" << extruder_id
-                        << " dst_addr=" << &region.expolygons
-                        << " dst_data=" << region.expolygons.data()
-                        << " dst_size=" << region.expolygons.size()
-                        << " dst_capacity=" << region.expolygons.capacity();
                     if (! region.expolygons.empty()) {
                         region.bbox = get_extents(region.expolygons);
                         layer_split = true;
