@@ -1,0 +1,522 @@
+# OrcaSlicer UI Automation Protocol (v1.0.0)
+
+OrcaSlicer ships an **opt-in, localhost-only JSON-RPC server** that lets external
+scripts introspect, drive, and screenshot the running OrcaSlicer GUI. It is built
+for end-to-end testing and automation: a script can enumerate the live widget
+tree, click buttons, type text, send keyboard shortcuts, wait for UI state, query
+high-level application state, and capture both window and 3D-viewport images.
+
+This document is the protocol reference. It describes activation, the transport,
+the JSON-RPC envelope, every method, the unified node shape, the target/locator
+model, error codes, the set of instrumented automation ids, ImGui specifics,
+platform caveats, a quick-start snippet, and planned future work.
+
+---
+
+## 1. Overview & activation
+
+The automation server is **OFF by default**. It is enabled with two
+command-line flags:
+
+| Flag | Meaning |
+|---|---|
+| `--automation-server` | Enable the automation server. |
+| `--automation-server-port=PORT` | Override the listening port. Optional; default is **13619**. |
+
+Example:
+
+```bash
+OrcaSlicer --automation-server --automation-server-port=13619 model.stl
+```
+
+The server binds to **`127.0.0.1` only** (the loopback interface). It is never
+exposed on an external network interface.
+
+**Security note (v1):** there is **no authentication token** in v1. The localhost
+bind is the *only* security boundary. Any process able to run code on the machine
+can connect to the port and drive the GUI — including injecting mouse and keyboard
+input — while the server is enabled. The feature is intended for testing and
+automation environments, not for production or shared/multi-user machines.
+
+When the server is enabled, OrcaSlicer emits a `warning`-level log line at startup
+to make the active input-injection surface obvious in logs, for example:
+
+```
+UI automation server ENABLED ... input injection is active
+```
+
+---
+
+## 2. Transport
+
+The server speaks **HTTP/1.1** over the loopback TCP socket:
+
+| Request | Response |
+|---|---|
+| `POST /jsonrpc` with a JSON-RPC 2.0 request body | A JSON-RPC 2.0 response with `Content-Type: application/json`. |
+| `GET /` | A plain-text health page: `OrcaSlicer automation server v1.0.0` (`Content-Type: text/plain`). |
+| Anything else | HTTP `404 Not Found`. |
+
+The server is **single-client / serialized** in v1: it handles one request at a
+time on its own dedicated I/O thread. Connections are not kept alive; each request
+is answered and the socket is closed. Clients should issue requests sequentially.
+
+---
+
+## 3. JSON-RPC envelope
+
+The protocol follows **JSON-RPC 2.0**.
+
+**Request:**
+
+```json
+{ "jsonrpc": "2.0", "id": <id>, "method": "<method>", "params": { ... } }
+```
+
+- `params` may be omitted; the server treats a missing `params` as an empty object.
+
+**Success response:**
+
+```json
+{ "jsonrpc": "2.0", "id": <id>, "result": { ... } }
+```
+
+**Error response:**
+
+```json
+{ "jsonrpc": "2.0", "id": <id>, "error": { "code": <int>, "message": "<string>" } }
+```
+
+The request `id` is echoed back in the response. When the request has no `id`, or
+when the request body cannot be parsed as JSON, the response `id` is `null`.
+
+---
+
+## 4. Methods
+
+There are 11 methods. Capabilities advertised by `automation.version` list the 10
+callable feature methods (every method except `automation.version` itself).
+
+### `automation.version`
+
+Returns server identity and the list of supported methods. Takes no parameters.
+
+**Result:**
+
+```json
+{
+  "version": "1.0.0",
+  "protocol": "2.0",
+  "capabilities": [
+    "tree.dump", "tree.find", "widget.get", "input.click", "input.type",
+    "input.key", "sync.wait_for", "app.state", "screenshot.window",
+    "screenshot.viewport3d"
+  ]
+}
+```
+
+### `tree.dump`
+
+Snapshot the live UI tree as a single root node with nested children.
+
+**Params (all optional):**
+
+| Param | Type | Default | Meaning |
+|---|---|---|---|
+| `root` | string (id or path) | full tree | Root the dump at the node with this id/path. |
+| `max_depth` | int | `-1` | Maximum depth to descend. `-1` = unlimited. |
+| `visible_only` | bool | `false` | When true, omit non-visible nodes. |
+| `include_imgui` | bool | `true` | When true, include ImGui items. |
+
+**Result:** the serialized root [node](#5-unified-node-shape), with `children`
+included.
+
+### `tree.find`
+
+Find all nodes matching a [target predicate](#6-target--locator).
+
+**Params:** a target predicate — any combination of `name`, `class`, `label`,
+`value`, `backend` (provided fields are ANDed). The params object is the target
+itself (it is *not* wrapped in a `target` key for this method).
+
+**Result:** a **flat JSON array** of matching nodes. The nodes in this array are
+returned **without** their `children` (use `widget.get`/`tree.dump` to descend).
+
+### `widget.get`
+
+Fetch a single node by [target](#6-target--locator).
+
+**Params:**
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `target` | object | yes | Target spec (id / path / predicate). |
+
+**Result:** a single [node](#5-unified-node-shape), with its `children` included.
+
+**Errors:** `1001` if the target is **not found** *or* **ambiguous** (more than one
+match).
+
+### `input.click`
+
+Click a resolved, actionable node.
+
+**Params:**
+
+| Param | Type | Default | Meaning |
+|---|---|---|---|
+| `target` | object | required | Target spec; must resolve to exactly one node. |
+| `button` | string | `"left"` | `"left"`, `"right"`, or `"middle"`. |
+| `double` | bool | `false` | Double-click when true. |
+| `modifiers` | array of string | `[]` | Held modifiers: any of `"ctrl"`, `"shift"`, `"alt"`, `"cmd"` (`"meta"` is accepted as an alias of `"cmd"`). |
+
+**Result:** `{ "ok": true }`.
+
+**Errors:** `1001` not found / ambiguous; `1002` if the target is disabled or
+hidden (not actionable). The click path raises and focuses the target's top-level
+window before injecting the click.
+
+### `input.type`
+
+Type text into the currently focused control.
+
+**Params:**
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `text` | string | yes | The text to type. |
+| `target` | object | no | If given, this node is clicked first (to focus it) before typing. |
+
+**Result:** `{ "ok": true }`.
+
+**Errors:** if `target` is supplied, the same actionability errors as
+`input.click` apply (`1001` / `1002`).
+
+### `input.key`
+
+Send a key chord (a key plus optional modifiers) to the focused window.
+
+**Params:**
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `keys` | string or array | yes | Either a `"+"`-joined string like `"ctrl+s"`, or an array like `["ctrl", "s"]`. The last token is the key; earlier tokens are modifiers. |
+
+**Result:** `{ "ok": true }`.
+
+**Key names must be lowercase.** Recognized key names include `"enter"`, `"tab"`,
+`"esc"`, `"space"`, `"delete"`, `"backspace"`, `"f5"` (and other function keys),
+and single characters (e.g. `"s"`, `"a"`). Recognized modifiers are `"ctrl"`,
+`"shift"`, `"alt"`, `"cmd"` (with `"meta"` as an alias for `"cmd"`).
+**Unrecognized or uppercase key names are silently ignored** — no error is
+returned, the key simply does not fire. Use lowercase names exclusively.
+
+### `sync.wait_for`
+
+Poll the UI until a target node reaches a desired state, or time out. This is the
+preferred way to synchronize with asynchronous UI changes (it replaces fragile
+fixed sleeps). Internally it repeatedly refreshes and dumps the tree, re-resolves
+the target, and evaluates the requested state until it is satisfied.
+
+**Params:**
+
+| Param | Type | Default | Meaning |
+|---|---|---|---|
+| `target` | object | required | Target spec. |
+| `state` | string | required | One of `"exists"`, `"visible"`, `"enabled"`, `"value"`. |
+| `value` | string | — | Required when `state` is `"value"`; the expected value to match. |
+| `timeout_ms` | int | `5000` | Maximum time to wait, in milliseconds. |
+| `poll_ms` | int | `100` | Poll interval, in milliseconds (minimum 1). |
+
+State semantics:
+
+- `exists` — the target resolves to a node.
+- `visible` — the node exists and is visible.
+- `enabled` — the node exists and is **both enabled and visible**.
+- `value` — the node has a value and that value equals the supplied `value`.
+
+**Result:** `{ "ok": true, "elapsed_ms": <int> }`.
+
+**Errors:** `1003` on timeout (the state was not reached within `timeout_ms`).
+
+### `app.state`
+
+Return a high-level application-state snapshot. Takes no parameters.
+
+**Result:**
+
+```json
+{
+  "active_tab": "<string>",
+  "project_loaded": <bool>,
+  "slicing": <bool>,
+  "slice_progress": <int>,
+  "foreground": <bool>,
+  "modal_dialog": "<string>"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `active_tab` | The active top-level tab/page. |
+| `project_loaded` | Whether a project/model is currently loaded. |
+| `slicing` | Whether slicing is currently in progress. |
+| `slice_progress` | Slicing progress (`-1` when unknown). |
+| `foreground` | Whether the main window is in the foreground. |
+| `modal_dialog` | Present only when a modal dialog is active; identifies it. Omitted otherwise. |
+
+### `screenshot.window`
+
+Capture a window's own GDI/native surface as a PNG.
+
+**Params:**
+
+| Param | Type | Default | Meaning |
+|---|---|---|---|
+| `target` | object | main frame | If given, capture this window; otherwise capture the main frame. |
+
+**Result:** `{ "png_base64": "<base64 PNG>", "width": <int>, "height": <int> }`.
+
+**Errors:** `1005` on screenshot failure; `1001` if a supplied `target` is not
+found or ambiguous.
+
+**LIMITATION:** `screenshot.window` captures the window's **own GDI surface only**.
+It does **not** capture the OpenGL 3D viewport, and it may not capture some native
+child controls. To capture the 3D scene, use
+[`screenshot.viewport3d`](#screenshotviewport3d).
+
+### `screenshot.viewport3d`
+
+Render the active 3D plate offscreen and return it as a PNG. This is the correct
+way to capture the 3D scene that `screenshot.window` cannot.
+
+**Params (all optional):**
+
+| Param | Type | Default | Meaning |
+|---|---|---|---|
+| `plate` | int | active plate | Plate index to render. |
+| `width` | int | `800` | Output width in pixels. |
+| `height` | int | `600` | Output height in pixels. |
+
+**Result:** `{ "png_base64": "<base64 PNG>", "width": <int>, "height": <int> }`.
+
+**Errors:** `1005` on failure.
+
+---
+
+## 5. Unified node shape
+
+Both wx widgets and ImGui items are reported with the same node schema:
+
+```json
+{
+  "backend": "wx" | "imgui",
+  "id": "<string>",
+  "path": "<string>",
+  "class": "<string>",
+  "label": "<string>",
+  "rect": { "x": <int>, "y": <int>, "w": <int>, "h": <int> },
+  "enabled": <bool>,
+  "visible": <bool>,
+  "value": "<string>",
+  "children": [ <node>, ... ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `backend` | `"wx"` for native wxWidgets controls, `"imgui"` for immediate-mode ImGui items. |
+| `id` | The automation id when one is set, otherwise a derived id. For ImGui items the `path` doubles as the `id`. |
+| `path` | Positional path, e.g. `"MainFrame/Panel[2]/Button[0]"`. For ImGui items: `"ImGui/<window>/<label>"`. |
+| `class` | wx class name, or the ImGui item type. |
+| `label` | The control's label/caption. May include an ImGui `##`-id suffix for ImGui items. |
+| `rect` | Bounding rectangle in **screen coordinates**. |
+| `enabled` | Whether the control is enabled. |
+| `visible` | Whether the control is visible. |
+| `value` | The control's value (text/choice/check/slider, etc.). **Omitted entirely** when the control has no applicable value. |
+| `children` | Child nodes. **wx only**, and present only when children are included (e.g. `tree.dump`, `widget.get`). ImGui items are flat (no children) and are listed under their window. |
+
+Notes:
+
+- The `value` key is **omitted** (not `null`) when the control has no value.
+- `children` is present only for wx nodes when children are requested; ImGui nodes
+  never carry `children`.
+
+---
+
+## 6. Target / locator
+
+Most methods accept a **target** object that identifies one or more nodes. A
+target may specify:
+
+| Field | Meaning |
+|---|---|
+| `id` | Exact automation id. |
+| `path` | Exact positional path. |
+| `name` | Predicate: matches either the node's `id` **or** its `label`. |
+| `class` | Predicate: exact class name. |
+| `label` | Predicate: exact label. |
+| `value` | Predicate: node has a value and it equals this string. |
+| `backend` | Predicate: `"wx"` or `"imgui"`. |
+
+**Resolution order:** **`id` → `path` → predicate.**
+
+- If `id` is present, only `id` is used (exact match).
+- Else if `path` is present, only `path` is used (exact match).
+- Else the predicate fields (`name`, `class`, `label`, `value`, `backend`) are
+  used, and all provided predicate fields are **ANDed** together.
+
+Action methods (`input.click`, `input.type` with a target, `widget.get`, and
+single-target `screenshot.window`) require a **unique** match. If the target
+resolves to zero matches or more than one match, the call fails with error `1001`
+(not found / ambiguous). `tree.find` is the exception: it returns *all* matches as
+an array and never errors on ambiguity.
+
+---
+
+## 7. Error codes
+
+Standard JSON-RPC codes:
+
+| Code | Meaning |
+|---|---|
+| `-32700` | Parse error — the request body was not valid JSON. |
+| `-32600` | Invalid request — missing/invalid `method`. |
+| `-32601` | Method not found — unknown method name. |
+| `-32602` | Invalid params — missing/invalid parameters for the method. |
+
+Application-specific codes:
+
+| Code | Meaning |
+|---|---|
+| `1001` | Widget/target not found **or** ambiguous (more than one match). |
+| `1002` | Not actionable — the target is disabled or hidden. |
+| `1003` | Wait timeout — `sync.wait_for` did not reach the requested state in time. |
+| `1004` | GUI thread busy / timeout — a backend call could not be marshaled onto the GUI thread in time (wedged GUI). |
+| `1005` | Screenshot failed. |
+| `1006` | Disabled. |
+
+---
+
+## 8. Automation-id naming conventions & instrumented ids
+
+Stable automation ids follow these prefix conventions:
+
+| Prefix | Used for |
+|---|---|
+| `btn_` | Buttons |
+| `combo_` | Preset combo boxes |
+| `tab_` | Tabs |
+| `canvas_` | Canvases |
+| `dlg_` | Dialog buttons |
+
+### Instrumented ids (as-built in v1)
+
+The following controls currently carry stable automation ids:
+
+| id | Control | Note |
+|---|---|---|
+| `btn_slice` | Slice-plate button | |
+| `btn_export` | Print / Export button | Multi-purpose: the action (Print plate / Export G-code / Send) depends on the current mode. |
+| `tab_device` | Device / Monitor tab (`MonitorPanel`) | |
+| `combo_printer` | Printer preset combo (sidebar) | |
+| `combo_filament` | Filament preset combo (sidebar) | First filament row only; extra multi-material rows are not instrumented. |
+| `canvas_3d` | 3D editor GL canvas | |
+
+### Controls NOT instrumented in v1
+
+Several controls are intentionally **not** instrumented in v1 because they have no
+stable `wxWindow` target to attach an id to:
+
+- **`combo_process`** — process settings are not a sidebar combo box in the current
+  OrcaSlicer layout, so there is no combo control to instrument.
+- **`btn_add`** — the add/import-object control is a `GLToolbar` item rendered
+  *inside* the GL canvas, not a `wxWindow`.
+- **`tab_prepare` / `tab_preview`** — the Prepare and Preview notebook pages are
+  both backed by the **same** window, and the per-tab buttons are private; there is
+  no distinct stable window to target.
+
+For controls that are not instrumented, scripts should fall back to class / label /
+path lookup (for wx controls) or ImGui-item lookup (for ImGui controls).
+
+---
+
+## 9. ImGui notes
+
+ImGui is **immediate-mode**: an item is addressable only while it is being drawn in
+the current frame. The automation backend records ImGui items each frame, and a
+`refresh_ui` is forced before every read or action so that the latest frame's items
+are captured.
+
+Consequences and conventions:
+
+- Use [`sync.wait_for`](#syncwait_for) to wait for a transient gizmo or panel item
+  to appear before acting on it.
+- ImGui items are reported with `backend: "imgui"`, a `path` of the form
+  `ImGui/<window>/<label>`, and that **path doubles as the item's `id`** in v1.
+- ImGui items are **flat** — they have no `children` and are listed under their
+  window.
+- Labels may include ImGui `##`-id suffixes (the part after `##` that ImGui uses to
+  disambiguate identically labeled widgets).
+- Raw `ImGui::` gizmos that are *not* routed through the instrumented
+  `ImGuiWrapper` widgets (for example some Emboss / SVG / Text gizmo controls) are
+  only covered at the **window level** in v1; their individual sub-items are not
+  enumerated.
+
+---
+
+## 10. Platform & display caveats
+
+- **Input requires a focused, visible window.** OS-level input injection uses
+  `wxUIActionSimulator`, which requires a focused, visible window. The click path
+  raises and focuses the target's top-level window first.
+- **Linux CI needs a display.** There must be an X display available; wrap test
+  runs with `xvfb-run` (for example, `xvfb-run -a python example_slice.py ...`).
+- **Input is asynchronous.** Do **not** rely on fixed sleeps. Use
+  [`sync.wait_for`](#syncwait_for) — for example, wait for `btn_export` to become
+  `enabled` after slicing completes — rather than sleeping for a guessed duration.
+- **Single-client / serialized.** v1 handles one request at a time; issue requests
+  sequentially from a single client.
+- **GUI-thread marshaling.** Every backend call is marshaled onto the GUI thread
+  with a timeout. A wedged or unresponsive GUI returns error `1004`.
+
+---
+
+## 11. Quick start
+
+Using the reference client in `tools/automation/orca_automation.py`:
+
+```python
+from orca_automation import OrcaClient
+
+orca = OrcaClient(port=13619)
+print(orca.version())                       # {'version': '1.0.0', ...}
+
+orca.click({"id": "btn_slice"})             # start slicing the plate
+orca.wait_for({"id": "btn_export"},         # wait until slicing finishes
+              state="enabled", timeout_ms=180000)
+
+png = orca.screenshot_3d(width=1024, height=768)   # render the 3D viewport
+with open("preview_3d.png", "wb") as f:
+    f.write(png)
+```
+
+For a full, runnable end-to-end example — launching OrcaSlicer with the automation
+flags, loading a model, slicing, waiting for completion, and saving both a window
+PNG and a 3D PNG — see `tools/automation/example_slice.py`.
+
+---
+
+## 12. Future work
+
+Planned enhancements beyond v1:
+
+- **Authentication token** plus a Preferences toggle to enable/disable the server
+  from the GUI.
+- **WebSocket push events** for real-time UI/state notifications (instead of
+  polling).
+- **Per-item ImGui gizmo instrumentation** so individual gizmo sub-controls (Emboss
+  / SVG / Text, etc.) are addressable, not just at the window level.
+- **More widget ids** — the process combo, the add/import button, and the
+  Prepare/Preview tabs once they expose stable windows.
+- An **MCP wrapper** to expose the automation surface to model-context tooling.
