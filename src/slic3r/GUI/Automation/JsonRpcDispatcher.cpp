@@ -128,6 +128,46 @@ std::vector<KeyChord> parse_keys(const nlohmann::json& params) {
 }
 } // namespace
 
+namespace {
+std::string base64_encode(const std::vector<unsigned char>& data) {
+    static const char* tbl =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((data.size() + 2) / 3) * 4);
+    size_t i = 0;
+    for (; i + 2 < data.size(); i += 3) {
+        const unsigned n = (data[i] << 16) | (data[i+1] << 8) | data[i+2];
+        out.push_back(tbl[(n >> 18) & 63]);
+        out.push_back(tbl[(n >> 12) & 63]);
+        out.push_back(tbl[(n >> 6) & 63]);
+        out.push_back(tbl[n & 63]);
+    }
+    if (i < data.size()) {
+        unsigned n = data[i] << 16;
+        const bool two = (i + 1 < data.size());
+        if (two) n |= data[i+1] << 8;
+        out.push_back(tbl[(n >> 18) & 63]);
+        out.push_back(tbl[(n >> 12) & 63]);
+        out.push_back(two ? tbl[(n >> 6) & 63] : '=');
+        out.push_back('=');
+    }
+    return out;
+}
+
+std::optional<int> opt_int(const nlohmann::json& p, const char* key) {
+    if (p.is_object() && p.contains(key) && p.at(key).is_number_integer())
+        return p.at(key).get<int>();
+    return std::nullopt;
+}
+
+nlohmann::json image_to_json(const PngImage& img) {
+    if (img.png.empty())
+        throw AutomationError(kErrScreenshotFail, "screenshot produced no data");
+    return { {"png_base64", base64_encode(img.png)},
+             {"width", img.width}, {"height", img.height} };
+}
+} // namespace
+
 nlohmann::json JsonRpcDispatcher::m_version(const nlohmann::json&) {
     return { {"version", kAutomationVersion},
              {"protocol", "2.0"},
@@ -252,8 +292,30 @@ nlohmann::json JsonRpcDispatcher::m_input_key(const nlohmann::json& params) {
 }
 
 nlohmann::json JsonRpcDispatcher::m_sync_wait_for(const nlohmann::json&)        { throw AutomationError(kMethodNotFound, "not implemented"); }
-nlohmann::json JsonRpcDispatcher::m_app_state(const nlohmann::json&)            { throw AutomationError(kMethodNotFound, "not implemented"); }
-nlohmann::json JsonRpcDispatcher::m_screenshot_window(const nlohmann::json&)    { throw AutomationError(kMethodNotFound, "not implemented"); }
-nlohmann::json JsonRpcDispatcher::m_screenshot_viewport3d(const nlohmann::json&){ throw AutomationError(kMethodNotFound, "not implemented"); }
+
+nlohmann::json JsonRpcDispatcher::m_app_state(const nlohmann::json&) {
+    return app_state_to_json(m_backend.app_state());
+}
+
+nlohmann::json JsonRpcDispatcher::m_screenshot_window(const nlohmann::json& params) {
+    m_backend.refresh_ui();
+    const UiNode* target_ptr = nullptr;
+    UiNode resolved;
+    if (params.is_object() && params.contains("target")) {
+        UiNode tree = m_backend.dump_tree(DumpOptions{});
+        int count = 0;
+        const UiNode* n = resolve_unique(tree, parse_target(params.at("target")), count);
+        if (count == 0) throw AutomationError(kErrNotFound, "target not found");
+        if (count > 1)  throw AutomationError(kErrNotFound, "target is ambiguous");
+        resolved = *n;
+        target_ptr = &resolved;
+    }
+    return image_to_json(m_backend.screenshot_window(target_ptr));
+}
+
+nlohmann::json JsonRpcDispatcher::m_screenshot_viewport3d(const nlohmann::json& params) {
+    return image_to_json(m_backend.screenshot_viewport3d(
+        opt_int(params, "plate"), opt_int(params, "width"), opt_int(params, "height")));
+}
 
 }}} // namespace

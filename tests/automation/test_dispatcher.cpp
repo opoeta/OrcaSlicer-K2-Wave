@@ -142,3 +142,31 @@ TEST_CASE("input.key parses array form [\"ctrl\",\"s\"]", "[automation][rpc]") {
     REQUIRE(mock.sent_keys[0][0].modifiers.size() == 1);
     CHECK(mock.sent_keys[0][0].key == "s");
 }
+
+TEST_CASE("app.state returns serialized state", "[automation][rpc]") {
+    MockUiBackend mock;
+    mock.state.active_tab = "prepare"; mock.state.project_loaded = true;
+    JsonRpcDispatcher d(mock);
+    const json resp = d.dispatch({{"jsonrpc","2.0"},{"id",1},{"method","app.state"}});
+    CHECK(resp.at("result").at("active_tab") == "prepare");
+    CHECK(resp.at("result").at("project_loaded") == true);
+}
+
+TEST_CASE("screenshot.window returns base64 + dims", "[automation][rpc]") {
+    MockUiBackend mock;
+    JsonRpcDispatcher d(mock);
+    const json resp = d.dispatch({{"jsonrpc","2.0"},{"id",2},{"method","screenshot.window"}});
+    CHECK(mock.screenshot_window_count == 1);
+    CHECK(resp.at("result").at("width") == 4);
+    CHECK(resp.at("result").at("png_base64").is_string());
+    CHECK_FALSE(resp.at("result").at("png_base64").get<std::string>().empty());
+}
+
+TEST_CASE("screenshot.viewport3d returns base64 + dims", "[automation][rpc]") {
+    MockUiBackend mock;
+    JsonRpcDispatcher d(mock);
+    const json resp = d.dispatch({{"jsonrpc","2.0"},{"id",3},{"method","screenshot.viewport3d"},
+                                  {"params",{{"width",256},{"height",256}}}});
+    CHECK(mock.screenshot_viewport_count == 1);
+    CHECK(resp.at("result").at("png_base64").is_string());
+}
