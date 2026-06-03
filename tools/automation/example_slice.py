@@ -59,7 +59,7 @@ def main() -> int:
         with open("window.png", "wb") as f:
             f.write(orca.screenshot())
         with open("preview_3d.png", "wb") as f:
-            f.write(orca.screenshot_3d(width=1024, height=768))
+            f.write(orca.screenshot_3d(width=1920, height=1080))
         print("wrote window.png and preview_3d.png")
         return 0
     finally:

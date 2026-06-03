@@ -17,7 +17,7 @@
 #include <wx/choice.h>
 #include <wx/checkbox.h>
 #include <wx/uiaction.h>   // wxUIActionSimulator (synthetic mouse/keyboard)
-#include <wx/dcclient.h>   // wxClientDC
+#include <wx/dcscreen.h>   // wxScreenDC
 #include <wx/dcmemory.h>   // wxMemoryDC
 #include <wx/mstream.h>    // wxMemoryOutputStream
 
@@ -296,10 +296,24 @@ PngImage WxUiBackend::screenshot_window(const UiNode* target) {
         const wxSize sz = win->GetClientSize();
         if (sz.x <= 0 || sz.y <= 0)
             throw AutomationError(kErrScreenshotFail, "window has no client area");
+        // Capture from the on-screen (DWM-composited) framebuffer rather than the
+        // window's own client DC. A parent client DC clips out child HWNDs, so all of
+        // OrcaSlicer's custom child-window controls (sidebar buttons/combos/panels) and
+        // the GL canvas come back as uninitialized (black) bitmap memory. wxScreenDC
+        // reads the composited desktop, which includes every child window, the OpenGL
+        // surface, and ImGui overlays — pixel-perfect to what the user sees.
+        //
+        // Requirement: the window must be visible and unobscured (see doc/automation.md
+        // §platform caveats); the backend raises it before injecting input anyway.
+        // HiDPI note: GetClientSize is in logical units while wxScreenDC is in physical
+        // pixels; on per-monitor-DPI setups the captured size may differ from the logical
+        // client size (documented caveat, acceptable for v1).
+        win->Raise();
+        const wxPoint origin = win->ClientToScreen(wxPoint(0, 0));
         wxBitmap bmp(sz.x, sz.y);
-        wxClientDC dc(win);
+        wxScreenDC sdc;
         wxMemoryDC mdc(bmp);
-        mdc.Blit(0, 0, sz.x, sz.y, &dc, 0, 0);
+        mdc.Blit(0, 0, sz.x, sz.y, &sdc, origin.x, origin.y);
         mdc.SelectObject(wxNullBitmap);
         return wximage_to_png(bmp.ConvertToImage());
     });

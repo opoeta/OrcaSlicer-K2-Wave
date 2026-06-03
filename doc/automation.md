@@ -267,7 +267,7 @@ Return a high-level application-state snapshot. Takes no parameters.
 
 ### `screenshot.window`
 
-Capture a window's own GDI/native surface as a PNG.
+Capture a window as a PNG, exactly as it appears on screen.
 
 **Params:**
 
@@ -280,15 +280,31 @@ Capture a window's own GDI/native surface as a PNG.
 **Errors:** `1005` on screenshot failure; `1001` if a supplied `target` is not
 found or ambiguous.
 
-**LIMITATION:** `screenshot.window` captures the window's **own GDI surface only**.
-It does **not** capture the OpenGL 3D viewport, and it may not capture some native
-child controls. To capture the 3D scene, use
-[`screenshot.viewport3d`](#screenshotviewport3d).
+**How it works:** the window's on-screen rectangle is read back from the
+DWM-composited desktop framebuffer (`wxScreenDC`), so the capture includes every
+native child control, the OpenGL 3D viewport, and ImGui overlays — it is a faithful
+image of what the user sees. (Capturing the parent window's own client DC instead
+would clip out child HWNDs and the GL surface, leaving them black; that is why this
+method reads from the screen.)
+
+**Caveats:**
+
+- The window must be **visible and unobscured**. Because the source is the on-screen
+  framebuffer, any overlapping window occludes the captured region. The backend
+  raises the target window before capturing.
+- **HiDPI:** the reported `width`/`height` come from the window's logical client size,
+  while the screen framebuffer is in physical pixels. On per-monitor-DPI displays the
+  two can differ; the capture may be cropped or scaled relative to the logical size.
+- For a clean, occlusion-independent, arbitrary-resolution render of the 3D scene
+  (including when the 3D tab is not the visible view), use
+  [`screenshot.viewport3d`](#screenshotviewport3d) instead.
 
 ### `screenshot.viewport3d`
 
-Render the active 3D plate offscreen and return it as a PNG. This is the correct
-way to capture the 3D scene that `screenshot.window` cannot.
+Render a 3D plate offscreen and return it as a PNG. Unlike `screenshot.window`, this
+renders into an offscreen framebuffer, so it is independent of window size and
+occlusion, works even when the 3D tab is hidden, and supports arbitrary output
+resolution — making it the right choice for clean, deterministic captures.
 
 **Params (all optional):**
 
@@ -475,6 +491,11 @@ Consequences and conventions:
 - **Input is asynchronous.** Do **not** rely on fixed sleeps. Use
   [`sync.wait_for`](#syncwait_for) — for example, wait for `btn_export` to become
   `enabled` after slicing completes — rather than sleeping for a guessed duration.
+- **`screenshot.window` reads the screen.** It captures the on-screen, DWM-composited
+  framebuffer, so the target window must be visible and unobscured, and the result is
+  in physical pixels (see HiDPI caveat under [`screenshot.window`](#screenshotwindow)).
+  For occlusion-independent 3D captures use
+  [`screenshot.viewport3d`](#screenshotviewport3d).
 - **Single-client / serialized.** v1 handles one request at a time; issue requests
   sequentially from a single client.
 - **GUI-thread marshaling.** Every backend call is marshaled onto the GUI thread
