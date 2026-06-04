@@ -1,4 +1,4 @@
-#include "Config.hpp"
+﻿#include "Config.hpp"
 #include "Exception.hpp"
 #include "Print.hpp"
 #include "BoundingBox.hpp"
@@ -96,7 +96,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
     if (opt_keys.empty())
         return false;
 
-#include "../../codegen/generated/Invalidation_generated.cpp"
+#include "../slic3r/GUI/generated/Invalidation_generated.cpp"
 
     std::vector<PrintStep>       steps;
     std::vector<PrintObjectStep> osteps;
@@ -111,7 +111,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             if (it_os != s_object_steps_map.end())
                 osteps.insert(osteps.end(), it_os->second.begin(), it_os->second.end());
         } else {
-            // Unknown option — conservatively invalidate all steps
+            // Unknown option вЂ” conservatively invalidate all steps
             invalidated |= this->invalidate_all_steps();
         }
     }
@@ -445,7 +445,7 @@ StringObjectException Print::sequential_print_clearance_valid(const Print &print
 #if 0 //do not sort anymore, use the order in object list
     auto bed_points = get_bed_shape(print_config);
     float bed_width = bed_points[1].x() - bed_points[0].x();
-    // 如果扩大以后的多边形的距离小于这个值，就需要严格保证从左到右的打印顺序，否则会撞工具头右侧
+    // е¦‚жћњж‰©е¤§д»ҐеђЋзљ„е¤љиѕ№еЅўзљ„и·ќз¦»е°ЏдєЋиї™дёЄеЂјпјЊе°±йњЂи¦ЃдёҐж јдїќиЇЃд»Ће·¦е€°еЏізљ„ж‰“еЌ°йЎєеєЏпјЊеђ¦е€™дјљж’ће·Ґе…·е¤ґеЏідѕ§
     float unsafe_dist = scale_(print_config.extruder_clearance_max_radius.value - print_config.extruder_clearance_radius.value);
     struct VecHash
     {
@@ -479,7 +479,7 @@ StringObjectException Print::sequential_print_clearance_valid(const Print &print
                 auto inter_max = std::min(ly2, ry2);
                 auto inter_y   = inter_max - inter_min;
 
-                // 如果y方向的重合超过轮廓的膨胀量，说明两个物体在一行，应该先打左边的物体，即先比较二者的x坐标。
+                // е¦‚жћњyж–№еђ‘зљ„й‡Ќеђ€и¶…иї‡иЅ®е»“зљ„и†ЁиѓЂй‡ЏпјЊиЇґжЋдё¤дёЄз‰©дЅ“ењЁдёЂиЎЊпјЊеє”иЇҐе…€ж‰“е·¦иѕ№зљ„з‰©дЅ“пјЊеЌіе…€жЇ”иѕѓдєЊиЂ…зљ„xеќђж ‡гЂ‚
                 // If the overlap in the y direction exceeds the expansion of the contour, it means that the two objects are in a row and the object on the left should be hit first, that is, the x coordinates of the two should be compared first.
                 if (inter_y > scale_(0.5 * print.config().extruder_clearance_radius.value)) {
                     if (std::max(rx1 - lx2, lx1 - rx2) < unsafe_dist) {
@@ -495,13 +495,13 @@ StringObjectException Print::sequential_print_clearance_valid(const Print &print
                     }
                 }
                 if (l.height > hc1 && r.height < hc1) {
-                    // 当前物体超过了顶盖高度，必须后打
+                    // еЅ“е‰Ќз‰©дЅ“и¶…иї‡дє†йЎ¶з›–й«еє¦пјЊеї…йЎ»еђЋж‰“
                     left_right_pair.insert({j, i});
                     BOOST_LOG_TRIVIAL(debug) << "height>hc1, print_instance " << r.print_instance->model_instance->get_object()->name << "(" << r.arrange_score << ")"
                                              << " -> " << l.print_instance->model_instance->get_object()->name << "(" << l.arrange_score << ")";
                 }
                 else if (l.height > hc2 && l.height > r.height && l.arrange_score<r.arrange_score) {
-                    // 如果当前物体的高度超过滑杆，且比r高，就给它加一点代价，尽量让高的物体后打（只有物体高度超过滑杆时才有必要按高度来）
+                    // е¦‚жћњеЅ“е‰Ќз‰©дЅ“зљ„й«еє¦и¶…иї‡ж»‘жќ†пјЊдё”жЇ”rй«пјЊе°±з»™е®ѓеЉ дёЂз‚№д»Јд»·пјЊе°Ѕй‡Џи®©й«зљ„з‰©дЅ“еђЋж‰“пј€еЏЄжњ‰з‰©дЅ“й«еє¦и¶…иї‡ж»‘жќ†ж—¶ж‰Ќжњ‰еї…и¦ЃжЊ‰й«еє¦жќҐпј‰
                     if (l.arrange_score < r.arrange_score)
                         l.arrange_score = r.arrange_score + 10;
                     BOOST_LOG_TRIVIAL(debug) << "height>hc2, print_instance " << inst.print_instance->model_instance->get_object()->name
@@ -511,8 +511,8 @@ StringObjectException Print::sequential_print_clearance_valid(const Print &print
             }
         }
     }
-    // 多做几次代价传播，因为前一次有些值没有更新。
-    // TODO 更好的办法是建立一颗树，一步到位。不过我暂时没精力搞，先就这样吧
+    // е¤љеЃље‡ ж¬Ўд»Јд»·дј ж’­пјЊе› дёєе‰ЌдёЂж¬Ўжњ‰дє›еЂјжІЎжњ‰ж›ґж–°гЂ‚
+    // TODO ж›ґеҐЅзљ„еЉћжі•жЇе»єз«‹дёЂйў—ж ‘пјЊдёЂж­Ґе€°дЅЌгЂ‚дёЌиї‡ж€‘жљ‚ж—¶жІЎзІѕеЉ›жђћпјЊе…€е°±иї™ж ·еђ§
     for (int k=0;k<5;k++)
     for (auto p : left_right_pair) {
         auto &l = print_instance_with_bounding_box[p(0)];
@@ -580,7 +580,7 @@ StringObjectException Print::sequential_print_clearance_valid(const Print &print
         for (int k = 0; k < print_instance_count; k++)
         {
             auto inst = print_instance_with_bounding_box[k].print_instance;
-            // 只需要考虑喷嘴到滑杆的偏移量，这个比整个工具头的碰撞半径要小得多
+            // еЏЄйњЂи¦ЃиЂѓи™‘е–·еґе€°ж»‘жќ†зљ„еЃЏз§»й‡ЏпјЊиї™дёЄжЇ”ж•ґдёЄе·Ґе…·е¤ґзљ„зў°ж’ћеЌЉеѕ„и¦Ѓе°Џеѕ—е¤љ
             // Only the offset from the nozzle to the slide bar needs to be considered, which is much smaller than the collision radius of the entire tool head.
             auto bbox = print_instance_with_bounding_box[k].bounding_box.inflated(-scale_(0.5 * print.config().extruder_clearance_radius.value + object_skirt_offset));
             auto iy1 = bbox.min.y();

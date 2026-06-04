@@ -967,7 +967,7 @@ bool Preset::has_cali_lines(PresetBundle* preset_bundle)
     return false;
 }
 
-#include "../../codegen/generated/Preset_options_generated.cpp"
+#include "../slic3r/GUI/generated/Preset_options_generated.cpp"
 
 
 static std::vector<std::string> s_Preset_machine_limits_options {

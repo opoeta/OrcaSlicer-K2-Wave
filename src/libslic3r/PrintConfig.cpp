@@ -897,10 +897,11 @@ void PrintConfigDef::init_common_params()
 void PrintConfigDef::init_fff_params()
 {
     ConfigOptionDef* def;
-#include "../../codegen/generated/PrintConfigDef_generated.cpp"
+#include "../slic3r/GUI/generated/PrintConfigDef_generated.cpp"
+
 }
 
-#include "../../codegen/generated/OptionKeys_generated.cpp"
+#include "../slic3r/GUI/generated/OptionKeys_generated.cpp"
 
 void PrintConfigDef::init_extruder_option_keys()
 {
