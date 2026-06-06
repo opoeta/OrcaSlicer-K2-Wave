@@ -3,6 +3,11 @@
 set WP=%CD%
 set _START_TIME=%TIME%
 
+@REM Detect target architecture (default x64; pass "arm64" to build for ARM64)
+set arch=x64
+if /I "%1"=="arm64" set arch=ARM64
+if /I "%2"=="arm64" set arch=ARM64
+
 @REM Check for Ninja Multi-Config option (-x)
 set USE_NINJA=0
 for %%a in (%*) do (
@@ -68,12 +73,13 @@ echo Using CMake generator: %CMAKE_GENERATOR%
 
 @REM Pack deps
 if "%1"=="pack" (
-    setlocal ENABLEDELAYEDEXPANSION 
+    setlocal ENABLEDELAYEDEXPANSION
     cd %WP%/deps/build
+    if "%arch%"=="ARM64" cd %WP%/deps/build-arm64
     for /f "tokens=2-4 delims=/ " %%a in ('date /t') do set build_date=%%c%%b%%a
-    echo packing deps: OrcaSlicer_dep_win64_!build_date!_vs!VS_VERSION!.zip
+    echo packing deps: OrcaSlicer_dep_win-!arch!_!build_date!_vs!VS_VERSION!.zip
 
-    %WP%/tools/7z.exe a OrcaSlicer_dep_win64_!build_date!_vs!VS_VERSION!.zip OrcaSlicer_dep
+    %WP%/tools/7z.exe a OrcaSlicer_dep_win-!arch!_!build_date!_vs!VS_VERSION!.zip OrcaSlicer_dep
     goto :done
 )
 
@@ -95,9 +101,10 @@ if "%debug%"=="ON" (
         set build_dir=build
     )
 )
-echo build type set to %build_type%
+if "%arch%"=="ARM64" set build_dir=%build_dir%-arm64
+echo build type set to %build_type%, arch=%arch%
 
-setlocal DISABLEDELAYEDEXPANSION 
+setlocal DISABLEDELAYEDEXPANSION
 cd deps
 mkdir %build_dir%
 cd %build_dir%
@@ -116,7 +123,7 @@ if "%USE_NINJA%"=="1" (
     cmake ../ -G %CMAKE_GENERATOR% -DCMAKE_BUILD_TYPE=%build_type%
     cmake --build . --config %build_type% --target deps
 ) else (
-    cmake ../ -G %CMAKE_GENERATOR% -A x64 -DCMAKE_BUILD_TYPE=%build_type%
+    cmake ../ -G %CMAKE_GENERATOR% -A %arch% -DCMAKE_BUILD_TYPE=%build_type%
     cmake --build . --config %build_type% --target deps -- -m
 )
 @echo off
@@ -135,7 +142,7 @@ if "%USE_NINJA%"=="1" (
     cmake .. -G %CMAKE_GENERATOR% -DORCA_TOOLS=ON %SIG_FLAG% -DCMAKE_BUILD_TYPE=%build_type%
     cmake --build . --config %build_type% --target ALL_BUILD
 ) else (
-    cmake .. -G %CMAKE_GENERATOR% -A x64 -DORCA_TOOLS=ON %SIG_FLAG% -DCMAKE_BUILD_TYPE=%build_type%
+    cmake .. -G %CMAKE_GENERATOR% -A %arch% -DORCA_TOOLS=ON %SIG_FLAG% -DCMAKE_BUILD_TYPE=%build_type%
     cmake --build . --config %build_type% --target ALL_BUILD -- -m
 )
 @echo off
