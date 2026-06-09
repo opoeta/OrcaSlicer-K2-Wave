@@ -1,0 +1,52 @@
+name: _gen GMP/MPFR arm64 blobs (temporary)
+
+on:
+  push:
+    branches: [ upstream-windows-arm64 ]
+    paths: [ '.github/workflows/_gen_gmp_arm64.yml' ]
+  workflow_dispatch:
+
+jobs:
+  gen:
+    runs-on: windows-11-arm
+    steps:
+      - name: Install MSYS2 (clangarm64) with GMP/MPFR and LLVM tools
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          update: true
+          install: >-
+            mingw-w64-clang-aarch64-gmp
+            mingw-w64-clang-aarch64-mpfr
+            mingw-w64-clang-aarch64-llvm
+
+      - name: Generate MSVC import libs and collect blobs
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          BIN=/clangarm64/bin
+          mkdir -p /tmp/out/gmp /tmp/out/mpfr
+
+          make_import_lib() {
+            local dll="$1"; local lib="$2"; local def="/tmp/${dll%.dll}.def"
+            echo "EXPORTS" > "$def"
+            llvm-readobj --coff-exports "$BIN/$dll" | awk '/Name: /{print $2}' >> "$def"
+            llvm-dlltool -m arm64 -D "$dll" -d "$def" -l "$BIN/$lib"
+          }
+
+          make_import_lib libgmp-10.dll libgmp-10.lib
+          MPFR_DLL=$(ls $BIN/libmpfr-*.dll | head -1 | xargs basename)
+          if [ "$MPFR_DLL" != "libmpfr-4.dll" ]; then cp "$BIN/$MPFR_DLL" "$BIN/libmpfr-4.dll"; fi
+          make_import_lib libmpfr-4.dll libmpfr-4.lib
+
+          cp $BIN/libgmp-10.dll $BIN/libgmp-10.lib /tmp/out/gmp/
+          cp $BIN/libmpfr-4.dll $BIN/libmpfr-4.lib /tmp/out/mpfr/
+          cp /clangarm64/include/gmp.h  /tmp/out/gmp/
+          cp /clangarm64/include/mpfr.h /tmp/out/mpfr/ || true
+          cp -r /tmp/out "$GITHUB_WORKSPACE/_blobs_out"
+
+      - name: Upload blobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmp-mpfr-win-arm64
+          path: _blobs_out/
