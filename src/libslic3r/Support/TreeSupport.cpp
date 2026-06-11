@@ -1357,7 +1357,12 @@ static void make_perimeter_and_infill(ExtrusionEntitiesPtr& dst, const ExPolygon
             dst = std::move(loops_entities);
         }
     }
-    dst.erase(std::remove_if(dst.begin(), dst.end(), [](ExtrusionEntity *entity) { return static_cast<ExtrusionEntityCollection *>(entity)->empty(); }), dst.end());
+
+    // Orca: Some entities are direct paths, so check the type before testing for an empty collection.
+    dst.erase(std::remove_if(dst.begin(), dst.end(), [](ExtrusionEntity *entity) {
+        return entity != nullptr && entity->is_collection() && static_cast<ExtrusionEntityCollection *>(entity)->empty();
+    }), dst.end());
+
     if (infill_first) {
         // sort regions to reduce travel
         Points ordering_points;
@@ -2109,8 +2114,8 @@ void TreeSupport::draw_circles()
 
     // generate areas
     const coordf_t layer_height = config.layer_height.value;
-    const size_t   top_interface_layers = config.support_interface_top_layers.value;
-    const size_t   bottom_interface_layers = config.support_interface_bottom_layers.value < 0 ? top_interface_layers : config.support_interface_bottom_layers.value;
+    const size_t top_interface_layers = m_support_params.num_top_interface_layers;
+    const size_t bottom_interface_layers = number_of_support_interface_bottom_layers(config);
     const double nozzle_diameter = m_object->print()->config().nozzle_diameter.get_at(0);
     const coordf_t line_width = config.get_abs_value("support_line_width", nozzle_diameter);
     const coordf_t line_width_scaled           = scale_(line_width);
@@ -2770,7 +2775,7 @@ void TreeSupport::drop_nodes()
     const auto belt_floor_mode = m_print_config->belt_support_floor_mode.value;
     const bool has_belt_floor = std::abs(m_slicing_params.belt_floor_shear_factor) > EPSILON
         && belt_floor_mode == BeltSupportFloorMode::GeneratorOnly;
-    const size_t bottom_interface_layers = config.support_interface_bottom_layers.value < 0 ? top_interface_layers : config.support_interface_bottom_layers.value;
+    const size_t bottom_interface_layers = number_of_support_interface_bottom_layers(config);
     SupportNode::diameter_angle_scale_factor = diameter_angle_scale_factor;
     float        DO_NOT_MOVER_UNDER_MM       = is_slim ? 0 : 5;                     // do not move contact points under 5mm
 
