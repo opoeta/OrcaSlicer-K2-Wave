@@ -1834,6 +1834,12 @@ std::vector<GCode::LayerToPrint> GCode::collect_layers_to_print(const PrintObjec
             last_extrusion_layer = &layers_to_print.back();
     }
 
+    // ORCA-Belt: objects print at their position along the belt, so the first
+    // extrusions legitimately start far above Z=0. Drop the spurious
+    // "empty layers from the bed" range while keeping genuine mid-print gaps.
+    if (skip_empty_first_layer && !warning_ranges.empty() && warning_ranges.front().first == 0.)
+        warning_ranges.erase(warning_ranges.begin());
+
     if (! warning_ranges.empty()) {
         std::string warning;
         size_t i = 0;
@@ -3307,7 +3313,16 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
 
         pa_test.set_speed(fast_speed, slow_speed);
         pa_test.draw_numbers() = print.calib_params().print_numbers;
+
+        // ORCA-Belt: the PA line test draws directly on the build surface in
+        // logical bed coordinates — on a belt printer that surface is the
+        // belt plane, not the slicing plane.
+        BeltGCodeWriter* belt_writer = dynamic_cast<BeltGCodeWriter*>(m_writer.get());
+        if (belt_writer != nullptr)
+            belt_writer->set_world_coordinates(true);
         gcode += pa_test.generate_test(params.start, params.step, std::llround(std::ceil((params.end - params.start) / params.step)) + 1);
+        if (belt_writer != nullptr)
+            belt_writer->set_world_coordinates(false);
 
         file.write(gcode);
     } else {
@@ -4653,31 +4668,57 @@ LayerResult GCode::process_layer(
     gcode += ";_SET_FAN_SPEED_CHANGING_LAYER\n";
 
     //Calibration Layer-specific GCode
+    // ORCA-Belt: on belt printers the calibration object is counter-rotated to
+    // stand upright in slicing space on top of a support wedge, so its first
+    // layer starts above Z=0 (at its position along the belt) with support-only
+    // layers below it. Reference the per-height calibration bands to the bottom
+    // of the object so they keep their designed meaning; on regular printers
+    // the object base is at Z=0 and calib_z == print_z.
+    double calib_z = print_z;
+    if (m_config.belt_printer.value && print.calib_mode() != CalibMode::Calib_None) {
+        // Skip empty ghost layers the grid may produce below the object.
+        for (const Layer* l : layer.object()->layers())
+            if (!l->lslices.empty()) {
+                calib_z = print_z - (l->print_z - l->height);
+                break;
+            }
+    }
     switch (print.calib_mode()) {
         case CalibMode::Calib_PA_Tower: {
-            gcode += writer().set_pressure_advance(print.calib_params().start + static_cast<int>(print_z) * print.calib_params().step);
+            gcode += writer().set_pressure_advance(print.calib_params().start + static_cast<int>(std::max(0.0, calib_z)) * print.calib_params().step);
             break;
         }
         case CalibMode::Calib_Temp_Tower: {
-            gcode += writer().set_temperature(this->interpolate_value_across_layers(static_cast<float>(print.calib_params().start), static_cast<float>(print.calib_params().end), 5.0f));
+            // ORCA-Belt: the sectioned variant prints each temperature as its
+            // own object in native belt orientation, with the temperature
+            // encoded in the object name ("temp_230") — step per object
+            // instead of ramping per layer band.
+            int sectioned_temp = 0;
+            if (m_config.belt_printer.value &&
+                sscanf(layer.object()->model_object()->name.c_str(), "temp_%d", &sectioned_temp) == 1 &&
+                sectioned_temp > 0) {
+                gcode += writer().set_temperature(static_cast<unsigned int>(sectioned_temp));
+            } else {
+                gcode += writer().set_temperature(this->interpolate_value_across_layers(static_cast<float>(print.calib_params().start), static_cast<float>(print.calib_params().end), 5.0f));
+            }
             break;
         }
         case CalibMode::Calib_VFA_Tower: {
-            auto _speed = print.calib_params().start + std::floor(print_z / 5.0) * print.calib_params().step;
+            auto _speed = print.calib_params().start + std::floor(std::max(0.0, calib_z) / 5.0) * print.calib_params().step;
             m_calib_config.set_key_value("outer_wall_speed", new ConfigOptionFloat(std::round(_speed)));
             break;
         }
         case CalibMode::Calib_Vol_speed_Tower: {
-            auto _speed = print.calib_params().start + print_z * print.calib_params().step;
+            auto _speed = print.calib_params().start + std::max(0.0, calib_z) * print.calib_params().step;
             m_calib_config.set_key_value("outer_wall_speed", new ConfigOptionFloat(std::round(_speed)));
             break;
         }
         case CalibMode::Calib_Retraction_tower: {
-            auto _length = print.calib_params().start + std::floor(std::max(0.0,print_z-0.4)) * print.calib_params().step;
+            auto _length = print.calib_params().start + std::floor(std::max(0.0,calib_z-0.4)) * print.calib_params().step;
             DynamicConfig _cfg;
             _cfg.set_key_value("retraction_length", new ConfigOptionFloats{_length});
             writer().config.apply(_cfg);
-            sprintf(buf, "; Calib_Retraction_tower: Z_HEIGHT: %g, length:%g\n", print_z, _length);
+            sprintf(buf, "; Calib_Retraction_tower: Z_HEIGHT: %g, length:%g\n", calib_z, _length);
             gcode += buf;
             break;
         }
@@ -7415,25 +7456,39 @@ std::string GCode::extrusion_role_to_string_for_parser(const ExtrusionRole & rol
 // Step = 0 means gradual interpolation finishing at last value.
 float GCode::interpolate_value_across_layers(float start_value, float end_value, float step) const
 {
-    if (m_layer_index <= 1) {
+    float ratio;
+    // ORCA-Belt: counter-rotated calibration objects stand on a support wedge,
+    // so support-only layers below the object would stretch a layer-index
+    // interpolation. Use the object's own Z span instead, so the value ramps
+    // across the test geometry only.
+    if (m_config.belt_printer.value && m_layer != nullptr && !m_layer->object()->layers().empty()) {
+        const auto& layers = m_layer->object()->layers();
+        // Skip empty ghost layers the grid may produce below the object.
+        double z_min = layers.front()->print_z;
+        for (const Layer* l : layers)
+            if (!l->lslices.empty()) { z_min = l->print_z; break; }
+        const double z_max = layers.back()->print_z;
+        if (m_layer->print_z <= z_min + EPSILON || z_max - z_min <= EPSILON)
+            return start_value;
+        ratio = float(std::min(1.0, (m_layer->print_z - z_min) / (z_max - z_min)));
+    } else if (m_layer_index <= 1) {
         return start_value;
+    } else {
+        ratio = m_layer_index / (m_layer_count - 1.f);
     }
-    else {
-        bool use_steps = step > 0.f;
-        if (use_steps) {
-            if (start_value > end_value) {
-                start_value += step;
-            } else {
-                end_value += step;
-            }
+    bool use_steps = step > 0.f;
+    if (use_steps) {
+        if (start_value > end_value) {
+            start_value += step;
+        } else {
+            end_value += step;
         }
-        float ratio = m_layer_index / (m_layer_count - 1.f);
-        float value = start_value + ratio * (end_value - start_value);
-        if (use_steps) {
-            value = trunc(value / step) * step;
-        }
-        return value;
     }
+    float value = start_value + ratio * (end_value - start_value);
+    if (use_steps) {
+        value = trunc(value / step) * step;
+    }
+    return value;
 }
 
 std::string encodeBase64(uint64_t value)
