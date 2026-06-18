@@ -45,6 +45,34 @@ enum OptionListMembership {
   LIST_VARIANT_OPTION_KEYS      = 3;
 }
 
+// C++ co_type override values, used when the proto wire type (float/int32) is
+// ambiguous about the real ConfigOption class. Each value name is the coXXX
+// identifier the codegen emits, and must have a matching entry in
+// hint_class_map (config_codegen.py). Making this an enum lets protoc reject a
+// typo'd hint (e.g. coFloar) at compile time instead of silently mis-typing a
+// setting. To add a new override: add a value here AND its hint_class_map entry.
+enum CoTypeHint {
+  CO_TYPE_HINT_UNSET = 0;
+  coPercent          = 1;
+  coPercents         = 2;
+  coEnum             = 3;
+  coEnums            = 4;
+}
+
+// Mirrors ConfigOptionDef::GUIType in src/libslic3r/Config.hpp. The codegen
+// emits ConfigOptionDef::GUIType::<name>, so each value name must match a C++
+// enumerator there. As an enum, a typo'd gui_type fails at protoc time.
+enum GuiType {
+  GUI_TYPE_UNSET = 0;
+  i_enum_open    = 1;
+  f_enum_open    = 2;
+  color          = 3;
+  select_open    = 4;
+  slider         = 5;
+  legend         = 6;
+  one_string     = 7;
+}
+
 // --- Custom field options ---
 
 extend google.protobuf.FieldOptions {
@@ -78,8 +106,8 @@ extend google.protobuf.FieldOptions {
   // Nullable support (for ConfigOptionFloatsNullable, etc.)
   bool    is_nullable   = 50017;
 
-  // GUI type override (e.g. "i_enum_open", "color", "f_enum_open")
-  string  gui_type      = 50019;
+  // GUI type override (e.g. i_enum_open, color, f_enum_open)
+  GuiType gui_type      = 50019;
   string  gui_flags     = 50020;
 
   // Enum metadata (key map reference for C++ enum binding)
@@ -91,9 +119,9 @@ extend google.protobuf.FieldOptions {
   // ConfigOptionDef::readonly
   bool    readonly      = 50023;
 
-  // Override the auto-detected co_type (e.g. "coPercent", "coEnum")
+  // Override the auto-detected co_type (e.g. coPercent, coEnum)
   // Used when proto type (float, int32) is ambiguous
-  string  co_type_hint  = 50024;
+  CoTypeHint co_type_hint = 50024;
 
   // Default value — constructor args only (e.g. "1.0", "5000.0, 5000.0")
   // Codegen reconstructs full C++ from co_type + this value

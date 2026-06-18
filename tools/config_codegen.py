@@ -66,6 +66,19 @@ LABEL_REQUIRED = 2
 LABEL_REPEATED = 3
 
 
+def _enum_opt_name(opts, ext):
+    """Return the value *name* of an enum-typed field extension, or None if
+    unset / the 0 sentinel. The proto enum constrains valid values at protoc
+    time, while the codegen keeps using the name string (which matches the
+    coXXX / ConfigOptionDef::GUIType C++ identifier)."""
+    if not opts.HasExtension(ext):
+        return None
+    val = opts.Extensions[ext]
+    if val == 0:
+        return None
+    return ext.enum_type.values_by_number[val].name
+
+
 def mode_to_cpp(mode_val):
     """Convert mode enum value to C++ constant."""
     return {
@@ -203,7 +216,7 @@ class FieldInfo:
         self.full_width = opts.Extensions[meta_pb2.full_width]
         self.height = opts.Extensions[meta_pb2.height] or None
         self.is_nullable = opts.Extensions[meta_pb2.is_nullable]
-        self.gui_type = opts.Extensions[meta_pb2.gui_type] or None
+        self.gui_type = _enum_opt_name(opts, meta_pb2.gui_type)
         self.gui_flags = opts.Extensions[meta_pb2.gui_flags] or None
         self.enum_keys_map = opts.Extensions[meta_pb2.enum_keys_map_ref] or None
         self.no_cli = opts.Extensions[meta_pb2.no_cli]
@@ -218,7 +231,7 @@ class FieldInfo:
         self.default_value = opts.Extensions[meta_pb2.default_value] if self.has_default else None
         self.enum_value_entries = list(opts.Extensions[meta_pb2.enum_value_entries])
         self.enum_label_entries = list(opts.Extensions[meta_pb2.enum_label_entries])
-        self.co_type_hint = opts.Extensions[meta_pb2.co_type_hint] or None
+        self.co_type_hint = _enum_opt_name(opts, meta_pb2.co_type_hint)
 
         # Resolve C++ type info - co_type_hint overrides auto-detection
         co_type, option_class, is_vec = proto_type_to_co_type(
@@ -578,6 +591,129 @@ class CodeGenerator:
         return str(val)
 
 
+# ---------------------------------------------------------------------------
+# Lint pass — catch typos that protoc accepts but break the build or runtime.
+# protoc only validates proto-level correctness (field numbers, option types).
+# It has no idea that option strings get pasted into C++ L("...") literals, or
+# that a default must lie within [min_value, max_value]. These checks close that
+# gap so a bad edit fails fast at codegen time instead of at C++ compile / DLL
+# load / slice time.
+# ---------------------------------------------------------------------------
+
+# String options that the generator emits verbatim into C++ L("...") literals.
+_CPP_STRING_ATTRS = ("label", "full_label", "tooltip", "category", "sidetext")
+
+_NUMERIC_SCALAR = {"coFloat", "coInt", "coPercent"}
+_NUMERIC_VECTOR = {"coFloats", "coInts", "coPercents"}
+_INT_TYPES      = {"coInt", "coInts"}
+_BOOL_TYPES     = {"coBool", "coBools"}
+
+
+def _has_unescaped_quote(s):
+    """True if the (proto-parsed) string contains a double-quote that is NOT
+    backslash-escaped. Such a quote would terminate the generated C++ L("...")
+    literal and break compilation. Mirrors how _escape_cpp passes strings
+    through unchanged, so the proto must already carry '\\"' for a literal quote.
+    """
+    if not s:
+        return False
+    t = s.replace('\\\\', '')   # drop escaped backslashes so they don't mask a following quote
+    t = t.replace('\\"', '')    # drop already-escaped quotes
+    return '"' in t
+
+
+# A plain C++ numeric literal: optional sign, digits/decimal, optional exponent,
+# optional float suffix (e.g. "200", "0.", "-5", "1.5e3", "60.0f"). Anything else
+# in default_value (identifiers, macros, "nil_value()", "{0.0}") is an intentional
+# C++ expression that the generator passes through verbatim — not range-checkable.
+_NUM_LIT = re.compile(r'^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?[fF]?$')
+
+
+def _num_tokens(dv):
+    """Split a default into comma-separated tokens. Returns (tokens, all_numeric)."""
+    tokens = [t.strip() for t in dv.split(',') if t.strip() != ""]
+    all_numeric = bool(tokens) and all(_NUM_LIT.match(t) for t in tokens)
+    return tokens, all_numeric
+
+
+def _lint_default(field, errors):
+    """Validate a field's default_value against its type and numeric range.
+
+    Only plain numeric-literal defaults are checked; defaults that are C++
+    expressions/constants are passed through by the generator and skipped here.
+    """
+    dv = field.default_value
+    name = field.name
+
+    if field.co_type in _NUMERIC_SCALAR or field.co_type in _NUMERIC_VECTOR:
+        tokens, all_numeric = _num_tokens(dv)
+        if not all_numeric:
+            return  # intentional C++ expression (e.g. macro, nil_value(), braced init)
+        for tok in tokens:
+            num = float(tok.rstrip('fF'))
+            if field.co_type in _INT_TYPES and num != int(num):
+                errors.append(f"{name}: default_value '{dv}' is not an integer for {field.co_type}")
+            if field.min_value is not None and num < field.min_value:
+                errors.append(f"{name}: default {tok} is below min_value {field.min_value}")
+            if field.max_value is not None and num > field.max_value:
+                errors.append(f"{name}: default {tok} is above max_value {field.max_value}")
+
+    elif field.co_type in _BOOL_TYPES:
+        for tok in (t.strip().lower() for t in dv.split(',') if t.strip() != ""):
+            # Only flag clear numeric mistakes; bare identifiers are C++ constants.
+            if _NUM_LIT.match(tok) and tok not in ("0", "1"):
+                errors.append(f"{name}: default_value token '{tok}' is not a valid bool for {field.co_type}")
+
+
+def lint_fields(fields):
+    """Return (errors, warnings) lists for the parsed fields.
+
+    Errors block code generation; warnings are advisory.
+    """
+    errors = []
+    warnings = []
+    field_names = {f.name for f in fields}
+    seen = set()
+
+    for f in fields:
+        # Duplicate field name -> duplicate add() in generated C++ (redefinition).
+        if f.name in seen:
+            errors.append(f"{f.name}: duplicate field name across proto files")
+        seen.add(f.name)
+
+        # min > max is always a mistake.
+        if (f.min_value is not None and f.max_value is not None
+                and f.min_value > f.max_value):
+            errors.append(f"{f.name}: min_value ({f.min_value}) > max_value ({f.max_value})")
+
+        # Unescaped quotes in strings emitted into C++ L("...") break compilation.
+        for attr in _CPP_STRING_ATTRS:
+            val = getattr(f, attr)
+            if val and _has_unescaped_quote(val):
+                errors.append(f'{f.name}: ({attr}) has an unescaped double-quote — '
+                              f'use \\\\\\" in the proto for a literal quote')
+        for el in f.enum_label_entries:
+            if _has_unescaped_quote(el):
+                errors.append(f"{f.name}: enum label '{el}' has an unescaped double-quote")
+
+        # coEnum with a keys map but no value entries can fail to deserialize unless
+        # the keys map is supplied in C++ (see AGENTS.md). Advisory — some enums
+        # legitimately source their values from a get_enum_values() keys map.
+        if f.co_type == "coEnum" and f.enum_keys_map and not f.enum_value_entries:
+            warnings.append(f"{f.name}: coEnum has (enum_keys_map_ref) but no (enum_value_entries) "
+                            f"— verify profile values deserialize (see AGENTS.md)")
+
+        # default_value type/range checks.
+        if f.has_default and f.default_value:
+            _lint_default(f, errors)
+
+        # ratio_over should point at a real key (advisory — may reference a virtual key).
+        if f.ratio_over and f.ratio_over not in field_names:
+            warnings.append(f"{f.name}: ratio_over references unknown key '{f.ratio_over}'")
+
+    return errors, warnings
+
+
 def _group_name_to_hook(name):
     """Convert group name to a C++ hook method suffix: 'Cooling Fan' -> 'cooling_fan'."""
     return re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
@@ -815,6 +951,8 @@ def main():
                         help="Path to compiled .desc file (protoc --descriptor_set_out)")
     parser.add_argument("output_dir",
                         help="Directory to write generated C++ files")
+    parser.add_argument("--lint-only", action="store_true",
+                        help="Run proto lint checks and exit without writing files")
     args = parser.parse_args()
 
     # Read descriptor set
@@ -836,6 +974,21 @@ def main():
 
     # Generate code
     gen = CodeGenerator(file_descriptor_set)
+
+    # Lint before writing anything so a bad proto edit never produces broken
+    # generated files (fails fast at codegen instead of C++ compile / runtime).
+    errors, warnings = lint_fields(gen.fields)
+    for w in warnings:
+        print(f"  LINT WARNING: {w}")
+    if errors:
+        print(f"\n*** Proto lint FAILED ({len(errors)} error(s)) ***")
+        for e in errors:
+            print(f"  LINT ERROR: {e}")
+        sys.exit(2)
+    print(f"Lint passed ({len(gen.fields)} fields checked, {len(warnings)} warning(s))")
+
+    if args.lint_only:
+        return
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

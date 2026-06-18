@@ -87,6 +87,12 @@ def step_generate():
                 str(DESC_FILE), str(CODEGEN_OUT)])
 
 
+def step_lint():
+    print("\n=== Lint: proto sanity checks ===")
+    return run([sys.executable, str(ROOT / "tools" / "config_codegen.py"),
+                str(DESC_FILE), str(CODEGEN_OUT), "--lint-only"])
+
+
 def step_validate():
     print("\n=== Step 3: Validate ===")
     return run([sys.executable, str(ROOT / "tools" / "validate_codegen.py")])
@@ -101,7 +107,8 @@ def main():
     args = parser.parse_args()
 
     if args.validate_only:
-        sys.exit(0 if step_validate() else 1)
+        # Compile + lint the protos, then check the committed generated files are current.
+        sys.exit(0 if (step_compile() and step_lint() and step_validate()) else 1)
 
     for name, fn in [("Compile", step_compile), ("Generate", step_generate)]:
         if not fn():
