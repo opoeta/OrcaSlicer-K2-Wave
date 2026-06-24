@@ -19,7 +19,13 @@ if (MSVC AND "${DEPS_ARCH}" STREQUAL "arm64")
     set(_context_impl_line "-DBOOST_CONTEXT_IMPLEMENTATION:STRING=winfib")
 endif ()
 
+set(_options "")
+if (MSVC AND DEP_DEBUG)
+    set(_options "FORWARD_CONFIG")
+endif ()
+
 orcaslicer_add_cmake_project(Boost
+    ${_options}
     URL "https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.gz"
     URL_HASH SHA256=4d27e9efed0f6f152dc28db6430b9d3dfb40c0345da7342eaa5a987dde57bd95
     LIST_SEPARATOR |
