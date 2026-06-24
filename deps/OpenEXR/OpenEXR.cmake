@@ -28,44 +28,21 @@ if (APPLE AND IS_CROSS_COMPILE)
             -DOPENEXR_BUILD_UTILS:BOOL=OFF
             ${_cmake_openexr_arch}
     )
-elseif (MSVC AND "${DEPS_ARCH}" STREQUAL "arm64")
-
-# Windows ARM64: OpenEXR 2.5.5 hard-codes IMF_HAVE_SSE2 for any MSVC
-# (ImfSimd.h: `_MSC_VER >= 1300`), pulling in <emmintrin.h> (x86-only) -> C1189.
-# Patch the header to require an x86 target, and force the SSE cache vars off.
-ExternalProject_Add(dep_OpenEXR
-    EXCLUDE_FROM_ALL ON
-    URL      https://github.com/AcademySoftwareFoundation/openexr/archive/refs/tags/v2.5.5.zip
-    URL_HASH SHA256=0307a3d7e1fa1e77e9d84d7e9a8694583fbbbfd50bdc6884e2c96b8ef6b902de
-    INSTALL_DIR  ${DESTDIR}
-    DOWNLOAD_DIR ${DEP_DOWNLOAD_DIR}/OpenEXR
-    DEPENDS ${ZLIB_PKG}
-    PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_LIST_DIR}/patch_openexr_arm64.cmake
-    CMAKE_GENERATOR          "Visual Studio 17 2022"
-    CMAKE_GENERATOR_PLATFORM "ARM64"
-    CMAKE_CACHE_ARGS
-        -DCMAKE_INSTALL_PREFIX:STRING=${DESTDIR}
-        -DCMAKE_PREFIX_PATH:STRING=${DESTDIR}
-        -DCMAKE_BUILD_TYPE:STRING=Release
-        -DBUILD_SHARED_LIBS:BOOL=OFF
-        -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
-        -DBUILD_TESTING:BOOL=OFF
-        -DPYILMBASE_ENABLE:BOOL=OFF
-        -DOPENEXR_VIEWERS_ENABLE:BOOL=OFF
-        -DOPENEXR_BUILD_UTILS:BOOL=OFF
-        -DCMAKE_POLICY_VERSION_MINIMUM:STRING=3.5
-        -DOPENEXR_IMF_HAVE_SSE2:BOOL=OFF
-        -DOPENEXR_IMF_HAVE_SSSE3:BOOL=OFF
-        -DILMBASE_HAVE_SSE:BOOL=OFF
-        -DILMBASE_FORCE_DISABLE_INTEL_SSE:BOOL=ON
-    BUILD_COMMAND   ${CMAKE_COMMAND} --build . --config Release -- /m
-    INSTALL_COMMAND ${CMAKE_COMMAND} --build . --target install --config Release
-)
-
 else()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(_patch_cmd ${PATCH_CMD} ${CMAKE_CURRENT_LIST_DIR}/0001-OpenEXR-GCC13.patch)
+elseif (MSVC AND "${DEPS_ARCH}" STREQUAL "arm64")
+    # Windows ARM64: OpenEXR 2.5.5 hard-codes IMF_HAVE_SSE2 for any MSVC
+    # (ImfSimd.h: `_MSC_VER >= 1300`), pulling in <emmintrin.h> (x86-only) -> C1189.
+    # Patch the header to require an x86 target, and force the SSE cache vars off.
+    set(_patch_cmd ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_LIST_DIR}/patch_openexr_arm64.cmake)
+    set(_openexr_arm64_args
+        -DOPENEXR_IMF_HAVE_SSE2:BOOL=OFF
+        -DOPENEXR_IMF_HAVE_SSSE3:BOOL=OFF
+        -DILMBASE_HAVE_SSE:BOOL=OFF
+        -DILMBASE_FORCE_DISABLE_INTEL_SSE:BOOL=ON
+    )
 else ()
     set(_patch_cmd "")
 endif ()
@@ -83,6 +60,7 @@ orcaslicer_add_cmake_project(OpenEXR
         -DPYILMBASE_ENABLE:BOOL=OFF
         -DOPENEXR_VIEWERS_ENABLE:BOOL=OFF
         -DOPENEXR_BUILD_UTILS:BOOL=OFF
+        ${_openexr_arm64_args}
 )
 endif()
 
