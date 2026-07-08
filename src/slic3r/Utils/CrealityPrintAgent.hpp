@@ -54,8 +54,8 @@ public:
     // type so the preset_bundle->filaments.filament_id_by_type() lookup succeeds.
     static std::string normalize_filament_type(const std::string& filament_type);
 
-    // Score visible compatible filament presets against the CFS spool metadata and
-    // return the best-matching filament_id. See implementation for scoring details.
+    // Resolve CFS metadata to an exact preset name, preferring user presets on
+    // scored ties. Generic fallback retains the upstream filament ID.
     static std::string match_filament_preset(const PresetCollection& filaments,
                                              const std::string&      vendor,
                                              const std::string&      brand_name,
