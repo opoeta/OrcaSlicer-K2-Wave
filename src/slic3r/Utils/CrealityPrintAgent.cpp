@@ -30,19 +30,18 @@ bool has_visible_base_preset(const PresetCollection& filaments, const std::strin
 } // namespace
 
 // Score visible compatible filament presets against the CFS spool metadata and
-// return the best-matching filament_id. Scoring:
+// return the exact name of the best-matching preset. An exact case-insensitive
+// CFS name is authoritative and matched before type scoring so a bridge can
+// preserve an explicitly configured profile. Otherwise scoring is:
 //   +20  preset name contains brand_name as a substring
 //        (e.g. "Hyper PLA" in "Hyper PLA @Creality K2 0.4 nozzle")
 //   +10  preset name contains the vendor substring (e.g. "Creality")
-//   Tiebreak: prefer the SYSTEM (shipped) preset over user copies. Brand-
-//   specific system presets carry their own filament_id; user copies of
-//   generic presets inherit a generic filament_id from their parent, so
-//   preferring the user copy can collapse a brand-specific match back to
-//   "Generic PLA" via the inherited id. Plus: this code targets upstream
-//   OrcaSlicer where shipping the user's local tuning would be wrong.
+//   Tiebreak: prefer the USER preset over shipped system presets.
 // Requires the preset's declared filament_type to equal the spool's base type
-// (PLA/PETG/ABS/...) so we never auto-pick a PETG preset for a PLA spool.
-// Falls back to filaments.filament_id_by_type(base_type) when nothing scores.
+// (PLA/PETG/ABS/...) for heuristic matches so we never auto-pick a PETG preset
+// for a PLA spool. Falls back to filaments.filament_id_by_type(base_type) when
+// nothing scores; the downstream resolver retains its legacy ID lookup for that
+// generic fallback and for agents that still supply filament IDs.
 std::string CrealityPrintAgent::match_filament_preset(const PresetCollection& filaments,
                                                       const std::string&      vendor,
                                                       const std::string&      brand_name,
@@ -74,14 +73,21 @@ std::string CrealityPrintAgent::match_filament_preset(const PresetCollection& fi
         // exactly the presets users care about most.
         ++considered;
 
+        const std::string name_lower = to_lower(p.name);
+        if (!brand_lower.empty() && brand_lower != type_lower && name_lower == brand_lower) {
+            BOOST_LOG_TRIVIAL(info)
+                << "CrealityPrintAgent: exact CFS preset name \"" << brand_name
+                << "\" -> \"" << p.name << "\"";
+            return p.name;
+        }
+
         std::string preset_type;
         if (const auto* ft = p.config.option<ConfigOptionStrings>("filament_type"))
             if (!ft->values.empty()) preset_type = ft->values.front();
         if (to_lower(preset_type) != type_lower) continue;
 
-        const std::string name_lower = to_lower(p.name);
         int score = 0;
-        if (!brand_lower.empty() && name_lower.find(brand_lower) != std::string::npos)
+        if (!brand_lower.empty() && brand_lower != type_lower && name_lower.find(brand_lower) != std::string::npos)
             score += 20;
         if (!vendor_lower.empty() && name_lower.find(vendor_lower) != std::string::npos)
             score += 10;
@@ -104,7 +110,7 @@ std::string CrealityPrintAgent::match_filament_preset(const PresetCollection& fi
     std::sort(matches.begin(), matches.end(),
               [](const Match& a, const Match& b) {
                   if (a.score   != b.score)   return a.score > b.score;
-                  if (a.is_user != b.is_user) return !a.is_user; // prefer system over user
+                  if (a.is_user != b.is_user) return a.is_user; // prefer user over system
                   return false;
               });
 
@@ -114,7 +120,7 @@ std::string CrealityPrintAgent::match_filament_preset(const PresetCollection& fi
         << "\" (score=" << matches.front().score
         << ", " << matches.size() << " candidate(s) of " << considered << " considered)";
 
-    return matches.front().preset->filament_id;
+    return matches.front().preset->name;
 }
 
 CrealityPrintAgent::CrealityPrintAgent(std::string log_dir)
