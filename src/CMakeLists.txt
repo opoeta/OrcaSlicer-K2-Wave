@@ -44,18 +44,6 @@ if (SLIC3R_GUI)
         include(${wxWidgets_USE_FILE})
     endif()
 
-    if(APPLE AND TARGET wx::wxgl)
-        # Newer wxWidgets CMake exports may inject the macOS OpenGL framework
-        # as a quoted file path inside wx::wxgl, which Ninja then treats as a
-        # missing input file. Orca links OpenGL explicitly elsewhere, so strip
-        # these broken pseudo-paths from the imported target.
-        get_target_property(_wx_gl_libs wx::wxgl INTERFACE_LINK_LIBRARIES)
-        if(_wx_gl_libs)
-            list(FILTER _wx_gl_libs EXCLUDE REGEX "framework OpenGL")
-            set_target_properties(wx::wxgl PROPERTIES INTERFACE_LINK_LIBRARIES "${_wx_gl_libs}")
-        endif()
-    endif()
-
     find_package(JPEG QUIET)
 
     string(REGEX MATCH "wxpng" WX_PNG_BUILTIN ${wxWidgets_LIBRARIES})
@@ -131,8 +119,8 @@ endif (MINGW)
 
 if (NOT WIN32 AND NOT APPLE)
     # Binary name on unix like systems (Linux, Unix)
-    set_target_properties(OrcaSlicer PROPERTIES OUTPUT_NAME "orca-slicer")
-    set(SLIC3R_APP_CMD "orca-slicer")
+    set_target_properties(OrcaSlicer PROPERTIES OUTPUT_NAME "orca-waveoverhangs")
+    set(SLIC3R_APP_CMD "orca-waveoverhangs")
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/dev-utils/platform/unix/build_linux_image.sh.in ${CMAKE_CURRENT_BINARY_DIR}/build_linux_image.sh USE_SOURCE_PERMISSIONS @ONLY)
 endif ()
 
@@ -158,7 +146,7 @@ target_link_libraries(OrcaSlicer libslic3r_gui)
     if (MSVC)
         # Generate debug symbols even in release mode.
         target_link_options(OrcaSlicer PUBLIC "$<$<CONFIG:RELEASE>:/DEBUG>")
-        target_link_libraries(OrcaSlicer ws2_32.lib user32.lib Setupapi.lib)
+        target_link_libraries(OrcaSlicer user32.lib Setupapi.lib)
     elseif (MINGW)
         target_link_libraries(OrcaSlicer ws2_32 uxtheme setupapi)
     elseif (APPLE)
@@ -184,12 +172,9 @@ if (WIN32)
     if(MSVC)
         target_link_options(OrcaSlicer_app_gui PUBLIC "$<$<CONFIG:RELEASE>:/DEBUG>")
     endif()
-    target_compile_definitions(OrcaSlicer_app_gui PRIVATE "$<$<NOT:$<CONFIG:RelWithDebInfo>>:SLIC3R_WRAPPER_NOCONSOLE>")
+    target_compile_definitions(OrcaSlicer_app_gui PRIVATE -DSLIC3R_WRAPPER_NOCONSOLE)
     add_dependencies(OrcaSlicer_app_gui OrcaSlicer)
-    set_target_properties(OrcaSlicer_app_gui PROPERTIES
-        OUTPUT_NAME "orca-slicer"
-        WIN32_EXECUTABLE "$<NOT:$<CONFIG:RelWithDebInfo>>"
-    )
+    set_target_properties(OrcaSlicer_app_gui PROPERTIES OUTPUT_NAME "orca-waveoverhangs")
     target_link_libraries(OrcaSlicer_app_gui PRIVATE boost_headeronly)
 endif ()
 
@@ -237,7 +222,7 @@ else ()
     if (APPLE AND NOT CMAKE_MACOSX_BUNDLE)
         # On OSX, the name of the binary matches the name of the Application.
         add_custom_command(TARGET OrcaSlicer POST_BUILD
-            COMMAND ln -sf OrcaSlicer orca-slicer
+            COMMAND ln -sf OrcaSlicer orca-waveoverhangs
             WORKING_DIRECTORY "$<TARGET_FILE_DIR:OrcaSlicer>"
             VERBATIM)
     else ()
