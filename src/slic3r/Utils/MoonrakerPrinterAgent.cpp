@@ -508,6 +508,10 @@ void MoonrakerPrinterAgent::build_ams_payload(int ams_count, int max_lane_index,
                 if (tray->nozzle_temp > 0) {
                     tray_json["nozzle_temp_max"] = std::to_string(tray->nozzle_temp);
                 }
+                // Remaining filament percentage (parsed into DevAmsTray::remain).
+                if (tray->remain >= 0) {
+                    tray_json["remain"] = tray->remain;
+                }
             } else {
                 tray_json["tray_info_idx"] = "";
                 tray_json["tray_type"] = "";
@@ -530,6 +534,13 @@ void MoonrakerPrinterAgent::build_ams_payload(int ams_count, int max_lane_index,
     ams_json["ams"] = ams_array;
     ams_json["ams_exist_bits"] = ams_exist_ss.str();
     ams_json["tray_exist_bits"] = tray_exist_ss.str();
+
+    // Advertise remaining-filament detection when any tray reports a real remain
+    // value, so the AMS mapping UI draws the fill bar from DevAmsTray::remain
+    // instead of a fixed full bar.
+    const bool any_remain = std::any_of(trays.begin(), trays.end(),
+                                        [](const AmsTrayData& t) { return t.remain >= 0; });
+    ams_json["calibrate_remain_flag"] = any_remain;
 
     // Wrap in the expected structure for ParseV1_0
     nlohmann::json print_json = nlohmann::json::object();
@@ -896,6 +907,9 @@ bool MoonrakerPrinterAgent::fetch_hh_filament_info(std::vector<AmsTrayData>& tra
     const auto& gate_material = mmu.contains("gate_material") ? mmu["gate_material"] : nlohmann::json::array();
     const auto& gate_color = mmu.contains("gate_color") ? mmu["gate_color"] : nlohmann::json::array();
     const auto& gate_temperature = mmu.contains("gate_temperature") ? mmu["gate_temperature"] : nlohmann::json::array();
+    // Non-standard HH extension (published by the Joelma CFS->mmu shim):
+    // remaining filament percentage per gate (0..100; -1 = unknown).
+    const auto& gate_remain = mmu.contains("gate_remain") ? mmu["gate_remain"] : nlohmann::json::array();
 
     if (!gate_status.is_array() || !gate_material.is_array() ||
         !gate_color.is_array() || !gate_temperature.is_array()) {
@@ -931,6 +945,14 @@ bool MoonrakerPrinterAgent::fetch_hh_filament_info(std::vector<AmsTrayData>& tra
         tray.nozzle_temp = nozzle_temp;
         tray.bed_temp = 0;  // HH doesn't provide bed temp in gate arrays
         tray.has_filament = true;
+        // safe_array_int returns 0 on a missing entry, which would draw an
+        // empty spool — only accept an explicit non-negative value.
+        if (gate_remain.is_array() && gate_idx < static_cast<int>(gate_remain.size())
+            && gate_remain[gate_idx].is_number()) {
+            const int remain = gate_remain[gate_idx].get<int>();
+            if (remain >= 0 && remain <= 100)
+                tray.remain = remain;
+        }
 
         auto* bundle = GUI::wxGetApp().preset_bundle;
         tray.tray_info_idx = bundle
