@@ -61,6 +61,7 @@ public:
     bool enable;
     Polyline path;
 
+    // Orca:
     struct RetractionValues{
         double retraction_length_before_wipe = 0.;
         double retraction_length_during_wipe = 0.;
@@ -71,6 +72,8 @@ public:
     bool has_path() const { return !this->path.points.empty(); }
     void reset_path() { this->path = Polyline(); }
     std::string wipe(GCode &gcodegen, double length, bool toolchange = false, bool is_last = false);
+
+    // Orca:
     RetractionValues calculateWipeRetractionLengths(GCode& gcodegen, bool toolchange);
 };
 
