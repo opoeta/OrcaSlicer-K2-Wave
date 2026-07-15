@@ -659,14 +659,14 @@ endif()
 
 ## OPTIONAL packages
 
-# Find eigen3 or use bundled version
-if (NOT SLIC3R_STATIC)
-    find_package(Eigen3 3.3)
-endif ()
-if (NOT EIGEN3_FOUND)
-    set(EIGEN3_FOUND 1)
-    set(EIGEN3_INCLUDE_DIR ${LIBDIR}/eigen/)
-endif ()
+# Find and configure Eigen3. The deps tree builds Eigen 5.0.1, whose CMake
+# config defines the Eigen3::Eigen target that admesh, clipper and libslic3r
+# link. The previous optional lookup (skipped entirely under SLIC3R_STATIC)
+# with a bundled-include fallback never defined that target, so every CI
+# configure failed with "Target ... links to: Eigen3::Eigen ... not found".
+find_package(Eigen3 5.0.1 REQUIRED)
+# Keep the global include for sources that use Eigen headers without linking
+# the imported target.
 include_directories(BEFORE SYSTEM ${EIGEN3_INCLUDE_DIR})
 
 # Find expat or use bundled version
