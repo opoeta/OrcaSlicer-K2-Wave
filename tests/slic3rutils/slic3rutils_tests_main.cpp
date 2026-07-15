@@ -91,6 +91,41 @@ TEST_CASE("Creality CFS exact profile names and heuristic fallback select preset
           == "Creality Rapid PLA @K2 (Harky)");
 }
 
+TEST_CASE("Creality CFS boxsInfo parse: remaining percent, CFS-mini, external holder", "[CrealityPrintAgent]")
+{
+    // Two active boxes: id 0 is the external spool holder (type 1, must be
+    // skipped), id 1 is a CFS-mini (type 2, must be accepted and renumbered
+    // to AMS index 0). Slot A carries a remaining percent; slot B an
+    // out-of-range one (must fold to unknown = -1).
+    const std::string response = R"({
+        "boxsInfo": { "materialBoxs": [
+            { "id": 0, "state": 1, "type": 1, "materials": [
+                { "id": 0, "state": 1, "vendor": "Creality", "type": "PLA", "name": "Ext", "color": "#0FFFFFF" }
+            ]},
+            { "id": 1, "state": 1, "type": 2, "materials": [
+                { "id": 0, "state": 1, "vendor": "Creality", "type": "ABS", "name": "Hyper ABS", "color": "#0FFFFFF", "percent": 80 },
+                { "id": 1, "state": 2, "vendor": "Generic",  "type": "PLA", "name": "PLA",       "color": "#0FF1E1E", "percent": 150 },
+                { "id": 2, "state": 0, "vendor": "", "type": "", "name": "", "color": "-1" }
+            ]}
+        ]}
+    })";
+
+    std::vector<Slic3r::CrealityPrintAgent::CFSSlot> slots;
+    int         box_count = 0;
+    std::string error;
+    REQUIRE(Slic3r::CrealityPrintAgent::parse_cfs_response(response, slots, box_count, error));
+
+    CHECK(box_count == 1);          // external holder skipped, CFS-mini renumbered to 0
+    REQUIRE(slots.size() == 2);     // empty slot skipped
+    CHECK(slots[0].box_id == 0);
+    CHECK(slots[0].slot_id == 0);
+    CHECK(slots[0].filament_type == "ABS");
+    CHECK(slots[0].percent == 80);
+    CHECK(slots[0].color_hex == "#FFFFFF");  // "#0RRGGBB" normalized
+    CHECK(slots[1].slot_id == 1);
+    CHECK(slots[1].percent == -1);  // 150 is out of range -> unknown
+}
+
 TEST_CASE("Check SSL certificates paths", "[Http][NotWorking]") {
     
     Slic3r::Http g = Slic3r::Http::get("https://github.com/");

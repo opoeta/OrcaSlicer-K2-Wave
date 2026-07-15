@@ -96,6 +96,7 @@ protected:
         std::string tray_info_idx;       // Filament ID or exact preset name (optional)
         int         bed_temp = 0;        // Optional
         int         nozzle_temp = 0;     // Optional
+        int         remain = -1;         // Remaining filament percentage (0..100; -1 = unknown)
     };
 
     // Build ams JSON and call parser

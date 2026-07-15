@@ -33,6 +33,7 @@ public:
         std::string filament_type; // "PLA", "ABS", "PETG", ...
         std::string brand_name;    // "Hyper PLA", ...
         std::string vendor;        // "Creality", "eSUN", or "" if unknown
+        int         percent = -1;  // remaining filament percentage (0..100; -1 = unknown)
     };
 
     explicit CrealityPrintAgent(std::string log_dir);

@@ -152,11 +152,12 @@ std::string CrealityPrintAgent::normalize_filament_type(const std::string& filam
 // Parse the boxsInfo JSON returned by CrealityPrint::query_boxes_info().
 // Schema (verified 2026-05-06 against K2 Combo F021 firmware v1.1.260206):
 //   { "boxsInfo": { "materialBoxs": [
-//     { "id": int, "state": int, "type": int,    // type 0 = CFS, 1 = single-spool external
+//     { "id": int, "state": int, "type": int,    // type 0 = CFS, 1 = single-spool external, 2 = CFS-mini
 //       "materials": [
 //         { "id": int, "state": int,             // state 1 = loaded
 //           "vendor": str, "type": str, "name": str,
-//           "color": "#0RRGGBB" }, ...
+//           "color": "#0RRGGBB",
+//           "percent": int }, ...                // remaining filament %, optional
 //       ]}, ...
 //   ]}}
 bool CrealityPrintAgent::parse_cfs_response(const std::string&    response,
@@ -195,7 +196,9 @@ bool CrealityPrintAgent::parse_cfs_response(const std::string&    response,
         const int box_st   = box.value("state", 0);
         const int box_type = box.value("type",  0);
         if (box_st != 1)   continue; // inactive boxes
-        if (box_type != 0) continue; // non-CFS (external spool holder, handled separately by upload dialog)
+        // type 0 = CFS, 2 = CFS-mini; type 1 = external spool holder (handled
+        // separately by the upload dialog)
+        if (box_type != 0 && box_type != 2) continue;
 
         const int cfs_index = cfs_count++;
 
@@ -225,6 +228,8 @@ bool CrealityPrintAgent::parse_cfs_response(const std::string&    response,
             s.brand_name    = mat.value("name",   "");
             s.filament_type = s_type;
             s.color_hex     = mat.value("color",  "#FFFFFF");
+            const int pct   = mat.value("percent", -1);
+            s.percent       = (pct >= 0 && pct <= 100) ? pct : -1;
 
             // Creality reports colour as "#0RRGGBB" (8 chars with a leading zero
             // after '#'). Normalise to standard "#RRGGBB".
@@ -323,6 +328,7 @@ bool CrealityPrintAgent::fetch_filament_info(std::string dev_id)
             tray.has_filament = true;
             tray.tray_type    = normalize_filament_type(s.filament_type);
             tray.tray_color   = s.color_hex;
+            tray.remain       = s.percent;
 
             if (bundle) {
                 tray.tray_info_idx = match_filament_preset(
